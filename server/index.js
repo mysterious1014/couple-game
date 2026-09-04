@@ -4,8 +4,10 @@
 // - 游玩记录上报与查询
 // - 管理员后台（默认账号 admin / 888888）
 const express = require('express');
+const http = require('http');
 const crypto = require('crypto');
 const path = require('path');
+const { ExpressPeerServer } = require('peer');
 const { data, save } = require('./store');
 
 const app = express();
@@ -229,6 +231,18 @@ function seedAdmin() {
 }
 
 seedAdmin();
-app.listen(PORT, () => {
+
+// 自建 PeerJS 信令服务器（与 Express 同端口，路径 /peerjs）
+// 避免使用 PeerJS 默认国外云信令，解决国内创建房间卡住的问题
+const server = http.createServer(app);
+const peerServer = ExpressPeerServer(server, {
+  path: '/peerjs',
+  proxied: true,
+  allow_discovery: false,
+});
+app.use('/peerjs', peerServer);
+
+server.listen(PORT, () => {
   console.log('游戏站点运行中： http://localhost:' + PORT);
+  console.log('PeerJS 信令服务器运行中： ws://localhost:' + PORT + '/peerjs');
 });

@@ -46,12 +46,15 @@ function setLobbyNick(name) {
 }
 
 $('createBtn').onclick = async () => {
+  $('createBtn').disabled = true;
   $('lobbyHint').textContent = '正在创建房间…';
   try {
     const code = await net.host(currentName());
     enterRoom(code);
   } catch (e) {
-    $('lobbyHint').textContent = '创建失败：' + e.message;
+    $('lobbyHint').textContent = '创建失败：' + (e.message || '网络异常，请重试');
+  } finally {
+    $('createBtn').disabled = false;
   }
 };
 
@@ -59,6 +62,7 @@ $('joinBtn').onclick = async () => {
   const raw = $('roomInput').value.trim();
   if (!/^\d{4}$/.test(raw)) { $('lobbyHint').textContent = '请输入 4 位数字房间号'; return; }
 
+  $('joinBtn').disabled = true;
   $('lobbyHint').textContent = '正在加入房间…';
   try {
     const info = await Net.peekRoom(raw);
@@ -70,7 +74,9 @@ $('joinBtn').onclick = async () => {
     await net.join(raw, currentName(), password);
     enterRoom(raw);
   } catch (e) {
-    $('lobbyHint').textContent = '加入失败：' + e.message;
+    $('lobbyHint').textContent = '加入失败：' + (e.message || '网络异常，请重试');
+  } finally {
+    $('joinBtn').disabled = false;
   }
 };
 

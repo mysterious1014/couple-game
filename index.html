@@ -1,126 +1,126 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<html lang="zh-CN" data-page-node-id="rLp4hsvqP96NbkbQ8o0rdf">
+<head data-page-node-id="sOKqQ4gIuetuAxFqBm2jgr">
+  <meta charset="UTF-8" data-page-node-id="HnOqM2RrtR7deEWyF5Q19t" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="ZL9SK77W7iDiyyFE1utT6w" />
   <title>我们的游戏站</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css" data-page-node-id="NkaeDmw9DlfGzn0ptsv3sE" />
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
-<body>
+<body data-page-node-id="P0wclCKaPmFu1bEEFMcskI">
   <!-- 顶栏 -->
-  <header class="topbar">
-    <span class="brand">我们的游戏站</span>
-    <div id="authArea" class="auth-area"></div>
+  <header class="topbar" data-page-node-id="E2sE803hZDSCyFtcEFFIIi">
+    <span class="brand" data-page-node-id="ORd78eQg0Aag0HZy3ql7no">我们的游戏站</span>
+    <div id="authArea" class="auth-area" data-page-node-id="QJssFnAbSHhwMGuFEMcqY7"></div>
   </header>
 
-  <div id="app">
+  <div id="app" data-page-node-id="XZEQ2VHvVya5wxkBxtUk1P">
     <!-- 大厅 -->
-    <section id="lobby">
-      <p class="tip">一个人点「创建房间」拿到 4 位房间号发给对方，另一个人输入房间号点「加入」，就能一起玩啦。</p>
-      <p id="lobbyHint" class="hint"></p>
-      <div class="nick-line">
-        <label>我的昵称：</label>
-        <input id="nickInput" placeholder="取个昵称" maxlength="12" value="游客" />
+    <section id="lobby" data-page-node-id="vez73TMaTwzMn5N8ykkaeJ">
+      <p class="tip" data-page-node-id="Tky0vG89mGhpKcEcIXHjkD">一个人点「创建房间」拿到 4 位房间号发给对方，另一个人输入房间号点「加入」，就能一起玩啦。</p>
+      <p id="lobbyHint" class="hint" data-page-node-id="sckSnaFxaQYgvB32LJAsVy"></p>
+      <div class="nick-line" data-page-node-id="cPG9F0BIqbqXZZ8zV6RpB0">
+        <label data-page-node-id="ZGL9Y2D5TPViTwD0XkfqVf">我的昵称：</label>
+        <input id="nickInput" placeholder="取个昵称" maxlength="12" value="游客" data-page-node-id="QSZ296O1NdsRhtRBh21wqc" />
       </div>
-      <button id="createBtn" class="primary">创建房间</button>
-      <div class="join">
-        <input id="roomInput" placeholder="输入4位房间号" maxlength="4" inputmode="numeric" />
-        <button id="joinBtn">加入</button>
+      <button id="createBtn" class="primary" data-page-node-id="c4hQ6UIXBnbuV59vKxUT6b">创建房间</button>
+      <div class="join" data-page-node-id="G5c6QUY6JzbLB23hyarfcr">
+        <input id="roomInput" placeholder="输入4位房间号" maxlength="4" inputmode="numeric" data-page-node-id="N2QAc5dKObmp9XscLJFPAY" />
+        <button id="joinBtn" data-page-node-id="hp8tB7phGqQJ57AO9OMxvk">加入</button>
       </div>
     </section>
 
     <!-- 房间 -->
-    <section id="room" hidden>
-      <div class="room-header">
-        <div class="room-code-box">
-          <span class="rc-label">房间号</span>
-          <span id="roomCodeBig" class="rc-code">0000</span>
-          <button id="copyRoomCode">复制</button>
+    <section id="room" hidden data-page-node-id="0W8knZBdeWO31d4uGMVoC2">
+      <div class="room-header" data-page-node-id="zdfXmVCpo0MHrUrpEs4moF">
+        <div class="room-code-box" data-page-node-id="8aqArntupnmaqftXJjP8IV">
+          <span class="rc-label" data-page-node-id="Wn9y8Jjomx2CvFFBxGCkXy">房间号</span>
+          <span id="roomCodeBig" class="rc-code" data-page-node-id="T9ET1DGg3YnFOojJsK28hM">0000</span>
+          <button id="copyRoomCode" data-page-node-id="WhL77ZDHa7DNl1OKKtkgLW">复制</button>
         </div>
-        <div class="room-players">
-          <div class="player host">
-            <span id="hostName" class="p-name">房主</span><span class="p-tag">房主</span>
+        <div class="room-players" data-page-node-id="lkVHT1SMpV4F8Ou1dqM3SC">
+          <div class="player host" data-page-node-id="5ycYLSjWLER5Rgp7QE7oD0">
+            <span id="hostName" class="p-name" data-page-node-id="IpxEtNnQtJygQ7TmsBpUfH">房主</span><span class="p-tag" data-page-node-id="kvN1gSAPfvwC3ocYFa1urx">房主</span>
           </div>
-          <div class="player guest">
-            <span id="guestName" class="p-name empty">等待对方加入…</span><span id="guestTag" class="p-tag" hidden>玩家</span>
+          <div class="player guest" data-page-node-id="JpfHmt2ewCbc0fVkBARuHi">
+            <span id="guestName" class="p-name empty" data-page-node-id="RTkC3QZ0mGHG8QqKbCTtMO">等待对方加入…</span><span id="guestTag" class="p-tag" hidden data-page-node-id="EgVnenKo4DAPLahbWe4BPL">玩家</span>
           </div>
         </div>
       </div>
 
       <!-- 房主设置面板 -->
-      <div id="hostPanel" class="room-settings" hidden>
-        <h3>房间设置</h3>
-        <div class="rs-row">
-          <label>房间密码</label>
-          <div class="rs-pwd">
-            <input id="roomPwd" type="password" placeholder="不设置则公开" maxlength="12" />
-            <button id="setPwdBtn">设置</button>
-            <button id="clearPwdBtn" hidden>清除</button>
+      <div id="hostPanel" class="room-settings" hidden data-page-node-id="5IF7FMsFdp6xyKgnIgZycV">
+        <h3 data-page-node-id="8afU11HuCTHtPW4i9hbGeq">房间设置</h3>
+        <div class="rs-row" data-page-node-id="oCB0slSuCjU50jErFiY5Rk">
+          <label data-page-node-id="rPh5dFQzvawSJyUZBb5DPn">房间密码</label>
+          <div class="rs-pwd" data-page-node-id="DCSkXNnwdxufjZ6cRceymR">
+            <input id="roomPwd" type="password" placeholder="不设置则公开" maxlength="12" data-page-node-id="QANCEif0h7JKkz2uCzHChi" />
+            <button id="setPwdBtn" data-page-node-id="6Wb0sUCOlBNVRFnVjsjHnn">设置</button>
+            <button id="clearPwdBtn" hidden data-page-node-id="VDzxOieRfRbF0UFoOoLJqB">清除</button>
           </div>
         </div>
-        <div class="rs-row">
-          <label>选择游戏</label>
-          <div id="roomGameList" class="room-game-list"></div>
+        <div class="rs-row" data-page-node-id="1xOcOOmbiNX60TqB6Yezbx">
+          <label data-page-node-id="mkdnPJICa9bhOyoAjuIjk4">选择游戏</label>
+          <div id="roomGameList" class="room-game-list" data-page-node-id="VRWCYDAi8YgVL4wqmzMh3l"></div>
         </div>
-        <p id="roomHint" class="hint"></p>
-        <button id="startGameBtn" class="primary" disabled>开始游戏</button>
+        <p id="roomHint" class="hint" data-page-node-id="xAoNLVMwb33vazDAGu1Rr2"></p>
+        <button id="startGameBtn" class="primary" disabled data-page-node-id="Oxu6HFaKbXJtVqX2ltfqgs">开始游戏</button>
       </div>
 
       <!-- 加入者等待面板 -->
-      <div id="guestPanel" class="room-wait" hidden>
-        <p>等待房主选择游戏并开始…</p>
-        <p class="rw-game">当前游戏：<b id="selectedGameName">未选择</b></p>
+      <div id="guestPanel" class="room-wait" hidden data-page-node-id="wmO3M9KSSYdhaLLGDYFvfh">
+        <p data-page-node-id="LiNE1kPC4U7vFjkBNyPRD3">等待房主选择游戏并开始…</p>
+        <p class="rw-game" data-page-node-id="cAkyaqrLONixT2J1HyQnbw">当前游戏：<b id="selectedGameName" data-page-node-id="0ZLBOcVATLxMLHPvdtjSdS">未选择</b></p>
       </div>
 
-      <button id="leaveRoomBtn" class="ghost">← 返回大厅</button>
+      <button id="leaveRoomBtn" class="ghost" data-page-node-id="UIEZPNBeOqazJbEMDqyFjS">← 返回大厅</button>
     </section>
 
     <!-- 游戏 -->
-    <section id="game" hidden>
-      <div class="game-top">
-        <button id="backBtn">← 返回房间</button>
-        <span id="gameTitle" class="game-title"></span>
+    <section id="game" hidden data-page-node-id="NgbVKmBpSWdAj0sjLzFNki">
+      <div class="game-top" data-page-node-id="7nTETXOrJSOg8tSeXEp5FJ">
+        <button id="backBtn" data-page-node-id="nw7oN5Em8yhu1d0EhXBrjE">← 返回房间</button>
+        <span id="gameTitle" class="game-title" data-page-node-id="pqXB7AdKAC9C3tzX0lENdT"></span>
       </div>
-      <div id="gameRoot"></div>
+      <div id="gameRoot" data-page-node-id="dQO4FhbuxN5bHvxezAGClN"></div>
     </section>
 
     <!-- 我的记录 -->
-    <section id="profile" hidden></section>
+    <section id="profile" hidden data-page-node-id="pgzuLcIGIQAJNy8Wut4R3T"></section>
 
     <!-- 管理后台 -->
-    <section id="admin" hidden></section>
+    <section id="admin" hidden data-page-node-id="CAjpRvB3UQ4MNhKiNvdCOi"></section>
   </div>
 
   <!-- 浮动聊天 -->
-  <div id="chatPanel" class="chat-panel" hidden>
-    <div class="chat-head">悄悄话</div>
-    <div id="chatLog" class="chat-log"></div>
-    <div class="chat-input">
-      <input id="chatInput" placeholder="说点什么…" maxlength="120" />
-      <button id="chatSend">发送</button>
+  <div id="chatPanel" class="chat-panel" hidden data-page-node-id="OSUVGALOkPdktPmO0uvoru">
+    <div class="chat-head" data-page-node-id="LSeg8Rs5USQxSiaMEFbexq">悄悄话</div>
+    <div id="chatLog" class="chat-log" data-page-node-id="meNe1Ol5v7ZcFivaJvxwI0"></div>
+    <div class="chat-input" data-page-node-id="3dEbACnNewFhiCT8IS9C5T">
+      <input id="chatInput" placeholder="说点什么…" maxlength="120" data-page-node-id="GarzG0gbky8aHYB2gRAGlS" />
+      <button id="chatSend" data-page-node-id="HngCjRb6ETb3wxVWoGvMKC">发送</button>
     </div>
   </div>
 
   <!-- 登录/注册弹窗 -->
-  <div id="authModal" class="modal" hidden>
-    <div class="modal-box">
-      <button id="authClose" class="modal-close">×</button>
-      <h2 id="authTitle">登录</h2>
-      <form id="loginForm" onsubmit="return false">
-        <input id="loginUser" placeholder="用户名" maxlength="20" />
-        <input id="loginPass" type="password" placeholder="密码" />
-        <button id="loginSubmit" class="primary">登录</button>
-        <p id="loginErr" class="err"></p>
+  <div id="authModal" class="modal" hidden data-page-node-id="RdqlQXdeLkHxLI9jCi1sDi">
+    <div class="modal-box" data-page-node-id="62bporoMbvQolmBMih1DMK">
+      <button id="authClose" class="modal-close" data-page-node-id="IYbsDynpV5TmK40sVouqQD">×</button>
+      <h2 id="authTitle" data-page-node-id="YAoAQHirBI7RwSubrnO8BD">登录</h2>
+      <form id="loginForm" onsubmit="return false" data-page-node-id="NCcco4WmAW4gweOPCb4b0F">
+        <input id="loginUser" placeholder="用户名" maxlength="20" data-page-node-id="Db6bzu08cBpDaxden4i8B1" />
+        <input id="loginPass" type="password" placeholder="密码" data-page-node-id="bgCvFhgxbiKudiE4Ag6seh" />
+        <button id="loginSubmit" class="primary" data-page-node-id="7SsTquP87BVXeFRxACt2yP">登录</button>
+        <p id="loginErr" class="err" data-page-node-id="ubE4LtQa6LijtSMj4EzM8O"></p>
       </form>
-      <form id="regForm" hidden onsubmit="return false">
-        <input id="regUser" placeholder="用户名（3-20位字母/数字/下划线）" maxlength="20" />
-        <input id="regPass" type="password" placeholder="密码（至少6位）" />
-        <input id="regNick" placeholder="昵称（选填）" maxlength="12" />
-        <button id="regSubmit" class="primary">注册并登录</button>
-        <p id="regErr" class="err"></p>
+      <form id="regForm" hidden onsubmit="return false" data-page-node-id="Wlns08AxrTFcmAP8Wz1FuV">
+        <input id="regUser" placeholder="用户名（3-20位字母/数字/下划线）" maxlength="20" data-page-node-id="Gwsg7XJ9g1ovBTASLzZCVu" />
+        <input id="regPass" type="password" placeholder="密码（至少6位）" data-page-node-id="McMdHIZedv4WrOfrXlkLmk" />
+        <input id="regNick" placeholder="昵称（选填）" maxlength="12" data-page-node-id="SalClj6BQsUeCyG3u342hH" />
+        <button id="regSubmit" class="primary" data-page-node-id="nbK6UdcZOPkfzmUSCWiZRJ">注册并登录</button>
+        <p id="regErr" class="err" data-page-node-id="ls6V5ACFEepYOyBphfKINs"></p>
       </form>
-      <p id="authSwitch" class="switch"></p>
+      <p id="authSwitch" class="switch" data-page-node-id="GRxD5TCATDsR8RK51FiItX"></p>
     </div>
   </div>
 

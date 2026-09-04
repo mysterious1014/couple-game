@@ -9,6 +9,28 @@
 //   net.onStatus((type, payload) => {})    连接状态变化
 // 属性：net.me(1房主/2加入者) net.myName net.peerName net.roomCode net.isHost net.ready
 
+function peerOptions() {
+  // 连接自建 PeerJS 信令服务器，与站点同源（自动适配 http/https）
+  const secure = location.protocol === 'https:';
+  return {
+    host: location.hostname,
+    port: secure ? 443 : (parseInt(location.port, 10) || (secure ? 443 : 80)),
+    path: '/peerjs',
+    secure,
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    },
+  };
+}
+
+function timeout(ms, msg) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms));
+}
+
 export class Net {
   constructor() {
     this.peer = null;
@@ -25,32 +47,34 @@ export class Net {
   }
 
   // 房主：创建 Peer -> 后端注册 4 位房间号 -> 等待连接
-  host(name) {
+  async host(name) {
     this._cleanup();
     this._isHost = true;
     this.myName = name || '房主';
-    this.peer = new Peer();
-    return new Promise((resolve, reject) => {
-      let rejected = false;
-      const fail = (err) => { if (!rejected) { rejected = true; reject(err); } };
-      this.peer.on('open', async () => {
-        this.peerId = this.peer.id;
-        try {
-          const r = await fetch('/api/rooms', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peerId: this.peerId, hostName: this.myName }),
-          });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.error || '创建房间失败');
-          this.roomCode = j.code;
-          this._emit('waiting', { code: j.code });
-          resolve(j.code);
-        } catch (e) { fail(e); }
-      });
-      this.peer.on('connection', (c) => this._setup(c));
-      this.peer.on('error', (e) => fail(e));
+    this.peer = new Peer(undefined, peerOptions());
+
+    // 等待 PeerJS open，最多 8 秒；超时报错让用户重试
+    const peerId = await Promise.race([
+      new Promise((resolve, reject) => {
+        this.peer.on('open', (id) => resolve(id));
+        this.peer.on('error', (e) => reject(e));
+      }),
+      timeout(8000, 'PeerJS 连接超时，请刷新重试'),
+    ]);
+
+    this.peerId = peerId;
+    this.peer.on('connection', (c) => this._setup(c));
+
+    const r = await fetch('/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerId: this.peerId, hostName: this.myName }),
     });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || '创建房间失败');
+    this.roomCode = j.code;
+    this._emit('waiting', { code: j.code });
+    return j.code;
   }
 
   // 加入者：查询房间 -> 校验密码 -> 获取真实 PeerID -> 连接
@@ -70,15 +94,21 @@ export class Net {
     this.peerId = j.peerId;
     this.peerName = j.hostName || '房主';
 
-    this.peer = new Peer();
+    this.peer = new Peer(undefined, peerOptions());
+
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        this.peer.on('open', () => resolve());
+        this.peer.on('error', (e) => reject(e));
+      }),
+      timeout(8000, 'PeerJS 连接超时，请刷新重试'),
+    ]);
+
+    const c = this.peer.connect(this.peerId);
     return new Promise((resolve, reject) => {
-      let rejected = false;
-      const fail = (err) => { if (!rejected) { rejected = true; reject(err); } };
-      this.peer.on('open', () => {
-        const c = this.peer.connect(this.peerId);
-        this._setup(c, resolve, fail);
-      });
+      const fail = (err) => reject(err);
       this.peer.on('error', (e) => fail(e));
+      this._setup(c, resolve, fail);
     });
   }
 
