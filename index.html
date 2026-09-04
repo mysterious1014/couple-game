@@ -17,7 +17,7 @@
   <div id="app" data-page-node-id="XZEQ2VHvVya5wxkBxtUk1P">
     <!-- 大厅 -->
     <section id="lobby" data-page-node-id="vez73TMaTwzMn5N8ykkaeJ">
-      <p class="tip" data-page-node-id="Tky0vG89mGhpKcEcIXHjkD">一个人点「创建房间」拿到 4 位房间号发给对方，另一个人输入房间号点「加入」，就能一起玩啦。</p>
+      <p class="tip" data-page-node-id="Tky0vG89mGhpKcEcIXHjkD">和 TA 异地也能同屏对战——把 4 位房间号发给对方即可。一个人也不怕，叫上电脑陪你玩。</p>
       <p id="lobbyHint" class="hint" data-page-node-id="sckSnaFxaQYgvB32LJAsVy"></p>
       <div class="nick-line" data-page-node-id="cPG9F0BIqbqXZZ8zV6RpB0">
         <label data-page-node-id="ZGL9Y2D5TPViTwD0XkfqVf">我的昵称：</label>
@@ -28,6 +28,7 @@
         <input id="roomInput" placeholder="输入4位房间号" maxlength="4" inputmode="numeric" data-page-node-id="N2QAc5dKObmp9XscLJFPAY" />
         <button id="joinBtn" data-page-node-id="hp8tB7phGqQJ57AO9OMxvk">加入</button>
       </div>
+      <button id="vsAIBtn" class="ghost solo" data-page-node-id="vsAIBtnNode">一个人？和电脑玩 →</button>
     </section>
 
     <!-- 房间 -->
@@ -51,7 +52,7 @@
       <!-- 房主设置面板 -->
       <div id="hostPanel" class="room-settings" hidden data-page-node-id="5IF7FMsFdp6xyKgnIgZycV">
         <h3 data-page-node-id="8afU11HuCTHtPW4i9hbGeq">房间设置</h3>
-        <div class="rs-row" data-page-node-id="oCB0slSuCjU50jErFiY5Rk">
+        <div class="rs-row" id="pwdRow" data-page-node-id="oCB0slSuCjU50jErFiY5Rk">
           <label data-page-node-id="rPh5dFQzvawSJyUZBb5DPn">房间密码</label>
           <div class="rs-pwd" data-page-node-id="DCSkXNnwdxufjZ6cRceymR">
             <input id="roomPwd" type="password" placeholder="不设置则公开" maxlength="12" data-page-node-id="QANCEif0h7JKkz2uCzHChi" />
@@ -99,6 +100,27 @@
     <div class="chat-input" data-page-node-id="3dEbACnNewFhiCT8IS9C5T">
       <input id="chatInput" placeholder="说点什么…" maxlength="120" data-page-node-id="GarzG0gbky8aHYB2gRAGlS" />
       <button id="chatSend" data-page-node-id="HngCjRb6ETb3wxVWoGvMKC">发送</button>
+    </div>
+  </div>
+
+  <!-- 人机难度选择弹窗 -->
+  <div id="aiModal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="aiClose" class="modal-close">×</button>
+      <h2>选择电脑难度</h2>
+      <p class="ai-sub">电脑可以陪你玩任意游戏，挑个难度开始吧。</p>
+      <button class="diff-btn" data-diff="easy">
+        <span class="diff-name">轻松</span>
+        <span class="diff-desc">电脑随意发挥，适合热身</span>
+      </button>
+      <button class="diff-btn" data-diff="medium">
+        <span class="diff-name">普通</span>
+        <span class="diff-desc">会防守会进攻，势均力敌</span>
+      </button>
+      <button class="diff-btn" data-diff="hard">
+        <span class="diff-name">困难</span>
+        <span class="diff-desc">步步算计，小心被虐 😈</span>
+      </button>
     </div>
   </div>
 

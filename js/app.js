@@ -1,9 +1,11 @@
 import { Net } from './net.js';
+import { AINet } from './ai.js';
 import { Auth, openAuth } from './auth.js';
 import { games } from './games/registry.js';
 import { renderProfile, renderAdmin } from './views.js';
 
-const net = new Net();
+const realNet = new Net();
+let net = realNet;                 // 当前使用的网络（双人 = realNet，人机 = AINet）
 const $ = (id) => document.getElementById(id);
 
 const lobby = $('lobby');
@@ -12,18 +14,20 @@ const game = $('game');
 const gameRoot = $('gameRoot');
 const profile = $('profile');
 const admin = $('admin');
+const chatPanel = $('chatPanel');
 
 let currentGame = null;
 let selectedGameId = '';
-let chatReady = false;
 let roomPasswordSet = false;
 
 // ---------- 视图切换 ----------
 function hideAll() { [lobby, room, game, profile, admin].forEach((s) => (s.hidden = true)); }
 function showLobby() {
   hideAll(); lobby.hidden = false;
-  $('chatPanel').hidden = true;
-  net.destroy();
+  chatPanel.hidden = true;
+  if (net && net.isAI) net.destroy();
+  net = realNet;
+  realNet.destroy();
   selectedGameId = '';
   roomPasswordSet = false;
 }
@@ -46,6 +50,7 @@ function setLobbyNick(name) {
 }
 
 $('createBtn').onclick = async () => {
+  net = realNet;
   $('createBtn').disabled = true;
   $('lobbyHint').textContent = '正在创建房间…';
   try {
@@ -62,6 +67,7 @@ $('joinBtn').onclick = async () => {
   const raw = $('roomInput').value.trim();
   if (!/^\d{4}$/.test(raw)) { $('lobbyHint').textContent = '请输入 4 位数字房间号'; return; }
 
+  net = realNet;
   $('joinBtn').disabled = true;
   $('lobbyHint').textContent = '正在加入房间…';
   try {
@@ -79,6 +85,19 @@ $('joinBtn').onclick = async () => {
     $('joinBtn').disabled = false;
   }
 };
+
+// 人机对战入口
+$('vsAIBtn').onclick = () => { $('aiModal').hidden = false; };
+document.querySelectorAll('[data-diff]').forEach((b) => {
+  b.onclick = () => {
+    const diff = b.dataset.diff;
+    $('aiModal').hidden = true;
+    net = new AINet(diff);
+    net.myName = currentName();
+    enterRoom('AI');
+  };
+});
+$('aiClose').onclick = () => { $('aiModal').hidden = true; };
 
 net.onStatus((type, payload) => {
   if (type === 'connected') {
@@ -101,16 +120,27 @@ net.onStatus((type, payload) => {
 function enterRoom(code) {
   hideAll();
   room.hidden = false;
-  $('chatPanel').hidden = false;
-  $('roomCodeBig').textContent = code;
-  $('hostName').textContent = net.isHost ? net.myName : net.peerName;
-
+  $('roomCodeBig').textContent = net.isAI ? 'AI' : code;
+  $('hostName').textContent = net.myName;
   selectedGameId = '';
   roomPasswordSet = false;
+  chatPanel.hidden = net.isAI;     // 人机模式不显示悄悄话
 
-  if (net.isHost) {
+  if (net.isAI) {
     $('hostPanel').hidden = false;
     $('guestPanel').hidden = true;
+    $('pwdRow').hidden = true;     // 人机无需密码
+    $('guestName').textContent = net.peerName;
+    $('guestName').classList.remove('empty');
+    $('guestTag').hidden = false;
+    $('guestTag').textContent = '电脑';
+    renderRoomGameList();
+    bindHostRoomEvents();
+    updateStartButton();
+  } else if (net.isHost) {
+    $('hostPanel').hidden = false;
+    $('guestPanel').hidden = true;
+    $('pwdRow').hidden = false;
     $('roomPwd').value = '';
     $('setPwdBtn').hidden = false;
     $('clearPwdBtn').hidden = true;
@@ -123,7 +153,7 @@ function enterRoom(code) {
   }
 
   updateRoomPlayers();
-  initChat();
+  if (!net.isAI) initChat();
 
   $('leaveRoomBtn').onclick = () => {
     if (currentGame) { if (currentGame.destroy) currentGame.destroy(); currentGame = null; }
@@ -144,7 +174,7 @@ function updateRoomPlayers() {
   const guestName = $('guestName');
   const guestTag = $('guestTag');
   if (both) {
-    guestName.textContent = net.peerName;
+    guestName.textContent = net.isAI ? net.peerName : net.peerName;
     guestName.classList.remove('empty');
     guestTag.hidden = false;
   } else {
@@ -177,7 +207,7 @@ function renderRoomGameList() {
       selectedGameId = gm.id;
       renderRoomGameList();
       updateStartButton();
-      net.send('room_set_game', { gameId: gm.id, gameName: gm.name });
+      if (!net.isAI) net.send('room_set_game', { gameId: gm.id, gameName: gm.name });
     };
     list.appendChild(card);
   });
@@ -197,7 +227,7 @@ function bindHostRoomEvents() {
       $('setPwdBtn').hidden = roomPasswordSet;
       $('clearPwdBtn').hidden = !roomPasswordSet;
       $('roomHint').textContent = roomPasswordSet ? '密码已设置' : '密码已清除';
-      net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
+      if (!net.isAI) net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
     } catch (e) { $('roomHint').textContent = e.message; }
   };
 
@@ -214,14 +244,20 @@ function bindHostRoomEvents() {
       $('setPwdBtn').hidden = false;
       $('clearPwdBtn').hidden = true;
       $('roomHint').textContent = '密码已清除';
-      net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
+      if (!net.isAI) net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
     } catch (e) { $('roomHint').textContent = e.message; }
   };
 
   $('startGameBtn').onclick = () => {
-    if (!selectedGameId || !net.ready) return;
-    net.send('start_game', { gameId: selectedGameId });
-    startGame(selectedGameId);
+    if (!selectedGameId) return;
+    if (net.isAI) {
+      net.beginGame(selectedGameId);
+      startGame(selectedGameId);
+    } else {
+      if (!net.ready) return;
+      net.send('start_game', { gameId: selectedGameId });
+      startGame(selectedGameId);
+    }
   };
 }
 
@@ -274,9 +310,7 @@ $('backBtn').onclick = backToRoom;
 
 // ---------- 聊天 ----------
 function initChat() {
-  if (chatReady) { $('chatLog').innerHTML = ''; return; }
-  chatReady = true;
-  $('chatPanel').hidden = false;
+  chatPanel.hidden = false;
   const log = $('chatLog');
   const input = $('chatInput');
   const sendBtn = $('chatSend');

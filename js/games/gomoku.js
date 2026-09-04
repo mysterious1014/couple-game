@@ -100,6 +100,7 @@ export default {
 
     const offs = [];
     offs.push(ctx.net.on('go_move', (m) => {
+      if (over) return;
       if (applyMove(m.r, m.c, m.by)) {
         if (!checkWin(m.r, m.c, m.by)) {
           current = 3 - m.by;
