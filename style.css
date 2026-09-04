@@ -284,7 +284,8 @@ button.ghost:hover { background: #fdeef6; }
 .rec-table .del:hover { background: #f6cdd9; }
 
 /* 登录/注册弹窗 */
-.modal {
+.modal { display: none; }
+.modal:not([hidden]) {
   position: fixed; inset: 0; background: rgba(60,30,45,0.45);
   display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px;
 }
