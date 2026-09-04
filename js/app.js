@@ -24,15 +24,25 @@ window.__showProfile = showProfile;
 window.__showAdmin = showAdmin;
 
 // ---------- 大厅 ----------
+function currentName() {
+  const input = $('nickInput');
+  let name = input ? input.value.trim() : '';
+  if (Auth.me) name = Auth.me.nickname || Auth.me.username;
+  return name || '游客';
+}
+
+function setLobbyNick(name) {
+  const input = $('nickInput');
+  if (input) input.value = name;
+}
+
 $('createBtn').onclick = () => {
-  if (!Auth.me) { openAuth('login'); return; }
-  net.host(Auth.me.username);
+  net.host(currentName());
 };
 $('joinBtn').onclick = () => {
   const c = $('roomInput').value.trim();
   if (!c) { $('lobbyHint').textContent = '请输入房间号'; return; }
-  if (!Auth.me) { openAuth('login'); return; }
-  net.join(c, Auth.me.username);
+  net.join(c, currentName());
 };
 
 net.onStatus((type, payload) => {
@@ -133,4 +143,8 @@ function initChat() {
 }
 
 // ---------- 启动 ----------
+Auth.onChange((me) => {
+  if (me) setLobbyNick(me.nickname || me.username);
+  else setLobbyNick('游客');
+});
 Auth.init();

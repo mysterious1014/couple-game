@@ -5,6 +5,15 @@ const $ = (id) => document.getElementById(id);
 
 export const Auth = {
   me: null,
+  _listeners: [],
+
+  onChange(cb) {
+    this._listeners.push(cb);
+    if (this.me !== undefined) cb(this.me);
+    return () => { this._listeners = this._listeners.filter((h) => h !== cb); };
+  },
+
+  _notify() { this._listeners.forEach((cb) => cb(this.me)); },
 
   async init() {
     try {
@@ -34,6 +43,7 @@ export const Auth = {
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '注册失败'); }
     this.me = await r.json();
     this.renderAuthArea();
+    this._notify();
     return this.me;
   },
 

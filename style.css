@@ -264,6 +264,9 @@ button.ghost:hover { background: #fdeef6; }
 /* 表单 */
 #lobby input { margin-bottom: 10px; }
 #lobby .join input { margin-bottom: 0; }
+#lobby .nick-line { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+#lobby .nick-line label { font-size: 14px; color: #7a3a52; white-space: nowrap; }
+#lobby .nick-line input { flex: 1; margin-bottom: 0; }
 
 /* 记录表格 */
 .rec-table {
