@@ -1,0 +1,16 @@
+{
+  "name": "couple-game-server",
+  "version": "1.0.0",
+  "description": "双人游戏站点后端：账号注册登录 + 游玩记录 + 管理后台",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
