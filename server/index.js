@@ -151,6 +151,11 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/server')) return res.status(404).end();
   next();
 });
+// 前端资源不加强缓存：每次部署后浏览器都会重新校验，避免旧 JS/HTML 被缓存导致功能不更新
+app.use((req, res, next) => {
+  if (/\.(html|js|css)$/.test(req.path)) res.set('Cache-Control', 'no-cache');
+  next();
+});
 app.use(express.static(ROOT, { extensions: ['html'] }));
 
 // ---------- 首次启动种入管理员 ----------
