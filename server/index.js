@@ -236,7 +236,7 @@ seedAdmin();
 // 避免使用 PeerJS 默认国外云信令，解决国内创建房间卡住的问题
 const server = http.createServer(app);
 const peerServer = ExpressPeerServer(server, {
-  path: '/peerjs',
+  path: '/',
   proxied: true,
   allow_discovery: false,
 });
