@@ -119,6 +119,64 @@ app.post('/api/play', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- 路由：房间 ----------
+const rooms = {}; // code -> { code, peerId, password, hostName, createdAt }
+let nextRoomCode = 1;
+
+function allocateRoomCode() {
+  for (let i = 0; i < 9999; i++) {
+    const code = String(nextRoomCode).padStart(4, '0');
+    nextRoomCode = nextRoomCode % 9999 + 1;
+    if (!rooms[code]) return code;
+  }
+  return null;
+}
+
+app.post('/api/rooms', (req, res) => {
+  const { peerId, hostName } = req.body || {};
+  if (!peerId) return res.status(400).json({ error: '缺少 peerId' });
+  const code = allocateRoomCode();
+  if (!code) return res.status(503).json({ error: '房间号已用完' });
+  rooms[code] = { code, peerId, password: '', hostName: hostName || '', createdAt: Date.now() };
+  res.json({ code, room: rooms[code] });
+});
+
+app.get('/api/rooms/:code', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  res.json({ code: room.code, peerId: room.peerId, hasPassword: !!room.password, hostName: room.hostName });
+});
+
+app.post('/api/rooms/:code/join', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  if (room.password && room.password !== (req.body.password || '')) {
+    return res.status(403).json({ error: '密码错误' });
+  }
+  res.json({ code: room.code, peerId: room.peerId, hostName: room.hostName });
+});
+
+app.patch('/api/rooms/:code', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  const { password } = req.body || {};
+  if (typeof password === 'string') room.password = password;
+  res.json({ ok: true });
+});
+
+app.delete('/api/rooms/:code', (req, res) => {
+  delete rooms[req.params.code];
+  res.json({ ok: true });
+});
+
+// 每小时清理 24 小时未活跃房间
+setInterval(() => {
+  const now = Date.now();
+  for (const code in rooms) {
+    if (now - rooms[code].createdAt > 24 * 60 * 60 * 1000) delete rooms[code];
+  }
+}, 60 * 60 * 1000);
+
 // ---------- 路由：管理员 ----------
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const users = data.users.map((u) => ({

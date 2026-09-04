@@ -7,16 +7,26 @@ const net = new Net();
 const $ = (id) => document.getElementById(id);
 
 const lobby = $('lobby');
-const menu = $('menu');
+const room = $('room');
 const game = $('game');
 const gameRoot = $('gameRoot');
 const profile = $('profile');
 const admin = $('admin');
+
 let currentGame = null;
+let selectedGameId = '';
+let chatReady = false;
+let roomPasswordSet = false;
 
 // ---------- 视图切换 ----------
-function hideAll() { [lobby, menu, game, profile, admin].forEach((s) => (s.hidden = true)); }
-function showLobby() { hideAll(); lobby.hidden = false; }
+function hideAll() { [lobby, room, game, profile, admin].forEach((s) => (s.hidden = true)); }
+function showLobby() {
+  hideAll(); lobby.hidden = false;
+  $('chatPanel').hidden = true;
+  net.destroy();
+  selectedGameId = '';
+  roomPasswordSet = false;
+}
 function showProfile() { hideAll(); profile.hidden = false; renderProfile(profile); }
 function showAdmin() { hideAll(); admin.hidden = false; renderAdmin(admin); }
 window.__showLobby = showLobby;
@@ -30,55 +40,207 @@ function currentName() {
   if (Auth.me) name = Auth.me.nickname || Auth.me.username;
   return name || '游客';
 }
-
 function setLobbyNick(name) {
   const input = $('nickInput');
   if (input) input.value = name;
 }
 
-$('createBtn').onclick = () => {
-  net.host(currentName());
+$('createBtn').onclick = async () => {
+  $('lobbyHint').textContent = '正在创建房间…';
+  try {
+    const code = await net.host(currentName());
+    enterRoom(code);
+  } catch (e) {
+    $('lobbyHint').textContent = '创建失败：' + e.message;
+  }
 };
-$('joinBtn').onclick = () => {
-  const c = $('roomInput').value.trim();
-  if (!c) { $('lobbyHint').textContent = '请输入房间号'; return; }
-  net.join(c, currentName());
+
+$('joinBtn').onclick = async () => {
+  const raw = $('roomInput').value.trim();
+  if (!/^\d{4}$/.test(raw)) { $('lobbyHint').textContent = '请输入 4 位数字房间号'; return; }
+
+  $('lobbyHint').textContent = '正在加入房间…';
+  try {
+    const info = await Net.peekRoom(raw);
+    let password = '';
+    if (info.hasPassword) {
+      password = window.prompt('该房间已设置密码，请输入：') || '';
+      if (!password) { $('lobbyHint').textContent = '已取消加入'; return; }
+    }
+    await net.join(raw, currentName(), password);
+    enterRoom(raw);
+  } catch (e) {
+    $('lobbyHint').textContent = '加入失败：' + e.message;
+  }
 };
 
 net.onStatus((type, payload) => {
-  if (type === 'waiting') {
-    $('lobbyHint').textContent = '房间已创建！把房间号发给对方：' + net.roomCode;
-  } else if (type === 'connected') {
-    enterMenu();
+  if (type === 'connected') {
+    updateRoomPlayers();
+    if (!net.isHost) net.send('room_get_settings');
   } else if (type === 'closed') {
-    alert('对方掉线了，刷新页面可重连');
-    location.reload();
+    updateRoomPlayers();
+    if (!game.hidden) {
+      alert('对方掉线了，返回大厅可重新连接');
+      showLobby();
+    }
   } else if (type === 'error') {
-    $('lobbyHint').textContent = '出错了：' + payload;
+    $('lobbyHint').textContent = '连接出错：' + payload;
+  } else if (type === 'peername') {
+    updateRoomPlayers();
   }
 });
 
-// ---------- 菜单 ----------
-function enterMenu() {
+// ---------- 房间 ----------
+function enterRoom(code) {
   hideAll();
-  menu.hidden = false;
-  $('roomCode').textContent = net.roomCode;
-  $('menuStatus').textContent = '已连接！你是 ' + (net.me === 1 ? '红方' : '黄方');
-  renderGameList();
+  room.hidden = false;
+  $('chatPanel').hidden = false;
+  $('roomCodeBig').textContent = code;
+  $('hostName').textContent = net.isHost ? net.myName : net.peerName;
+
+  selectedGameId = '';
+  roomPasswordSet = false;
+
+  if (net.isHost) {
+    $('hostPanel').hidden = false;
+    $('guestPanel').hidden = true;
+    $('roomPwd').value = '';
+    $('setPwdBtn').hidden = false;
+    $('clearPwdBtn').hidden = true;
+    renderRoomGameList();
+    bindHostRoomEvents();
+  } else {
+    $('hostPanel').hidden = true;
+    $('guestPanel').hidden = false;
+    $('selectedGameName').textContent = '未选择';
+  }
+
+  updateRoomPlayers();
   initChat();
+
+  $('leaveRoomBtn').onclick = () => {
+    if (currentGame) { if (currentGame.destroy) currentGame.destroy(); currentGame = null; }
+    showLobby();
+  };
+  $('copyRoomCode').onclick = () => {
+    navigator.clipboard.writeText(net.roomCode).then(() => {
+      const btn = $('copyRoomCode');
+      const old = btn.textContent;
+      btn.textContent = '已复制';
+      setTimeout(() => (btn.textContent = old), 1500);
+    });
+  };
 }
 
-function renderGameList() {
-  const list = $('gameList');
+function updateRoomPlayers() {
+  const both = net.ready;
+  const guestName = $('guestName');
+  const guestTag = $('guestTag');
+  if (both) {
+    guestName.textContent = net.peerName;
+    guestName.classList.remove('empty');
+    guestTag.hidden = false;
+  } else {
+    guestName.textContent = '等待对方加入…';
+    guestName.classList.add('empty');
+    guestTag.hidden = true;
+  }
+  updateStartButton();
+}
+
+function updateStartButton() {
+  const btn = $('startGameBtn');
+  if (!btn) return;
+  const both = net.ready;
+  const hasGame = !!selectedGameId;
+  btn.disabled = !(both && hasGame);
+  if (!both) btn.textContent = '等待对方加入';
+  else if (!hasGame) btn.textContent = '请选择游戏';
+  else btn.textContent = '开始游戏';
+}
+
+function renderRoomGameList() {
+  const list = $('roomGameList');
   list.innerHTML = '';
   games.forEach((gm) => {
     const card = document.createElement('div');
-    card.className = 'game-card';
-    card.innerHTML = `<div class="gc-name">${gm.name}</div><div class="gc-desc">${gm.desc}</div>`;
-    card.onclick = () => { net.send('goto', { game: gm.id }); startGame(gm.id); };
+    card.className = 'room-game-card' + (selectedGameId === gm.id ? ' on' : '');
+    card.innerHTML = `<div class="rg-name">${escapeHtml(gm.name)}</div><div class="rg-desc">${escapeHtml(gm.desc)}</div>`;
+    card.onclick = () => {
+      selectedGameId = gm.id;
+      renderRoomGameList();
+      updateStartButton();
+      net.send('room_set_game', { gameId: gm.id, gameName: gm.name });
+    };
     list.appendChild(card);
   });
 }
+
+function bindHostRoomEvents() {
+  $('setPwdBtn').onclick = async () => {
+    const pwd = $('roomPwd').value;
+    try {
+      const r = await fetch(`/api/rooms/${net.roomCode}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd }),
+      });
+      if (!r.ok) throw new Error('设置失败');
+      roomPasswordSet = !!pwd;
+      $('setPwdBtn').hidden = roomPasswordSet;
+      $('clearPwdBtn').hidden = !roomPasswordSet;
+      $('roomHint').textContent = roomPasswordSet ? '密码已设置' : '密码已清除';
+      net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
+    } catch (e) { $('roomHint').textContent = e.message; }
+  };
+
+  $('clearPwdBtn').onclick = async () => {
+    $('roomPwd').value = '';
+    try {
+      const r = await fetch(`/api/rooms/${net.roomCode}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      if (!r.ok) throw new Error('清除失败');
+      roomPasswordSet = false;
+      $('setPwdBtn').hidden = false;
+      $('clearPwdBtn').hidden = true;
+      $('roomHint').textContent = '密码已清除';
+      net.send('room_set_game', { gameId: selectedGameId, gameName: games.find((g) => g.id === selectedGameId)?.name || '' });
+    } catch (e) { $('roomHint').textContent = e.message; }
+  };
+
+  $('startGameBtn').onclick = () => {
+    if (!selectedGameId || !net.ready) return;
+    net.send('start_game', { gameId: selectedGameId });
+    startGame(selectedGameId);
+  };
+}
+
+net.on('room_set_game', (m) => {
+  if (!net.isHost) {
+    selectedGameId = m.gameId;
+    $('selectedGameName').textContent = m.gameName || '未选择';
+  }
+});
+
+net.on('room_settings', (m) => {
+  if (!net.isHost) {
+    selectedGameId = m.gameId;
+    $('selectedGameName').textContent = m.gameName || '未选择';
+  }
+});
+
+net.on('room_get_settings', () => {
+  if (net.isHost) {
+    const gm = games.find((g) => g.id === selectedGameId);
+    net.send('room_settings', { gameId: selectedGameId, gameName: gm ? gm.name : '' });
+  }
+});
+
+net.on('start_game', (m) => startGame(m.gameId));
 
 // ---------- 游戏路由 ----------
 function startGame(id) {
@@ -90,38 +252,29 @@ function startGame(id) {
   game.hidden = false;
   $('gameTitle').textContent = gm.name;
   currentGame = gm.mount({
-    root: gameRoot, net, back: backToMenu,
+    root: gameRoot, net, back: backToRoom,
     reportPlay: (gameId, gameName, opponent, result) =>
       Auth.reportPlay(gameId, gameName, opponent, result),
   });
 }
 
-function backToMenu() {
+function backToRoom() {
   if (currentGame && currentGame.destroy) currentGame.destroy();
   currentGame = null;
-  hideAll();
-  menu.hidden = false;
+  enterRoom(net.roomCode);
 }
 
-net.on('goto', (m) => startGame(m.game));
-
-$('backBtn').onclick = backToMenu;
-$('copyBtn').onclick = () => {
-  navigator.clipboard.writeText(net.roomCode).then(() => {
-    $('copyBtn').textContent = '已复制';
-    setTimeout(() => ($('copyBtn').textContent = '复制'), 1500);
-  });
-};
+$('backBtn').onclick = backToRoom;
 
 // ---------- 聊天 ----------
-let chatReady = false;
 function initChat() {
-  if (chatReady) return;
+  if (chatReady) { $('chatLog').innerHTML = ''; return; }
   chatReady = true;
   $('chatPanel').hidden = false;
   const log = $('chatLog');
   const input = $('chatInput');
   const sendBtn = $('chatSend');
+  log.innerHTML = '';
 
   function append(name, text, me) {
     const d = document.createElement('div');
@@ -148,3 +301,7 @@ Auth.onChange((me) => {
   else setLobbyNick('游客');
 });
 Auth.init();
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}

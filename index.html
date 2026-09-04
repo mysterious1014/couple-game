@@ -17,7 +17,7 @@
   <div id="app">
     <!-- 大厅 -->
     <section id="lobby">
-      <p class="tip">一个人点「创建房间」拿到房间号发给对方，另一个人输入房间号点「加入」，就能一起玩啦。</p>
+      <p class="tip">一个人点「创建房间」拿到 4 位房间号发给对方，另一个人输入房间号点「加入」，就能一起玩啦。</p>
       <p id="lobbyHint" class="hint"></p>
       <div class="nick-line">
         <label>我的昵称：</label>
@@ -25,23 +25,61 @@
       </div>
       <button id="createBtn" class="primary">创建房间</button>
       <div class="join">
-        <input id="roomInput" placeholder="输入对方给的房间号" />
+        <input id="roomInput" placeholder="输入4位房间号" maxlength="4" inputmode="numeric" />
         <button id="joinBtn">加入</button>
       </div>
     </section>
 
-    <!-- 菜单 -->
-    <section id="menu" hidden>
-      <div id="menuStatus" class="status-line"></div>
-      <div class="room-bar">房间号：<b id="roomCode"></b> <button id="copyBtn">复制</button></div>
-      <p class="sub">选一个游戏开始：</p>
-      <div id="gameList" class="game-list"></div>
+    <!-- 房间 -->
+    <section id="room" hidden>
+      <div class="room-header">
+        <div class="room-code-box">
+          <span class="rc-label">房间号</span>
+          <span id="roomCodeBig" class="rc-code">0000</span>
+          <button id="copyRoomCode">复制</button>
+        </div>
+        <div class="room-players">
+          <div class="player host">
+            <span id="hostName" class="p-name">房主</span><span class="p-tag">房主</span>
+          </div>
+          <div class="player guest">
+            <span id="guestName" class="p-name empty">等待对方加入…</span><span id="guestTag" class="p-tag" hidden>玩家</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 房主设置面板 -->
+      <div id="hostPanel" class="room-settings" hidden>
+        <h3>房间设置</h3>
+        <div class="rs-row">
+          <label>房间密码</label>
+          <div class="rs-pwd">
+            <input id="roomPwd" type="password" placeholder="不设置则公开" maxlength="12" />
+            <button id="setPwdBtn">设置</button>
+            <button id="clearPwdBtn" hidden>清除</button>
+          </div>
+        </div>
+        <div class="rs-row">
+          <label>选择游戏</label>
+          <div id="roomGameList" class="room-game-list"></div>
+        </div>
+        <p id="roomHint" class="hint"></p>
+        <button id="startGameBtn" class="primary" disabled>开始游戏</button>
+      </div>
+
+      <!-- 加入者等待面板 -->
+      <div id="guestPanel" class="room-wait" hidden>
+        <p>等待房主选择游戏并开始…</p>
+        <p class="rw-game">当前游戏：<b id="selectedGameName">未选择</b></p>
+      </div>
+
+      <button id="leaveRoomBtn" class="ghost">← 返回大厅</button>
     </section>
 
     <!-- 游戏 -->
     <section id="game" hidden>
       <div class="game-top">
-        <button id="backBtn">← 菜单</button>
+        <button id="backBtn">← 返回房间</button>
         <span id="gameTitle" class="game-title"></span>
       </div>
       <div id="gameRoot"></div>

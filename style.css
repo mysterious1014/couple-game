@@ -331,3 +331,88 @@ button.ghost:hover { background: #fdeef6; }
 .ach-flag { font-size: 11px; font-weight: 600; }
 .ach.on .ach-flag { color: #27ae60; }
 .ach.off .ach-flag { color: #bbb; }
+
+/* 房间页面 */
+#room { animation: fadeIn .25s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.room-header {
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 4px 14px rgba(214,105,138,0.12);
+  margin-bottom: 16px;
+}
+.room-code-box {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin-bottom: 16px;
+}
+.rc-label { font-size: 13px; color: #999; }
+.rc-code {
+  font-size: 36px; font-weight: 800; letter-spacing: 6px;
+  color: #d6698a; background: #fdeef6;
+  padding: 8px 18px; border-radius: 12px;
+}
+.room-code-box button { padding: 7px 14px; font-size: 13px; }
+
+.room-players { display: flex; gap: 10px; }
+.player {
+  flex: 1; display: flex; align-items: center; justify-content: space-between;
+  background: #f9f9f9; border-radius: 12px; padding: 10px 12px;
+}
+.player.host { background: #fff4f8; }
+.p-name { font-weight: 600; color: #7a3a52; }
+.p-name.empty { color: #bbb; font-weight: 400; }
+.p-tag {
+  font-size: 11px; color: #fff; background: #d6698a;
+  padding: 3px 8px; border-radius: 10px;
+}
+
+/* 房主设置面板 */
+.room-settings {
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 4px 14px rgba(214,105,138,0.12);
+  margin-bottom: 16px;
+}
+.room-settings h3 {
+  margin: 0 0 14px; color: #d6698a; font-size: 16px;
+}
+.rs-row { margin-bottom: 14px; }
+.rs-row label {
+  display: block; font-size: 13px; color: #7a3a52; margin-bottom: 6px; font-weight: 600;
+}
+.rs-pwd { display: flex; gap: 8px; }
+.rs-pwd input { flex: 1; margin: 0; }
+.rs-pwd button { white-space: nowrap; }
+
+.room-game-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.room-game-card {
+  background: #fafafa; border: 2px solid #f0e0e7;
+  border-radius: 12px; padding: 12px; text-align: center; cursor: pointer;
+  transition: border-color .15s, transform .08s;
+}
+.room-game-card:hover { transform: translateY(-2px); border-color: #f0b8cd; }
+.room-game-card.on { background: #fff4f8; border-color: #d6698a; }
+.rg-name { font-size: 15px; font-weight: 700; color: #7a3a52; margin-bottom: 4px; }
+.room-game-card.on .rg-name { color: #d6698a; }
+.rg-desc { font-size: 11px; color: #999; line-height: 1.4; }
+
+.room-settings .primary { margin: 6px 0 0; }
+.room-settings .primary:disabled {
+  background: #eac0cf; cursor: not-allowed;
+}
+
+/* 加入者等待面板 */
+.room-wait {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px 18px;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(214,105,138,0.12);
+  margin-bottom: 16px;
+}
+.room-wait p { margin: 0 0 8px; color: #666; }
+.rw-game { color: #7a3a52; font-size: 14px; }
+.rw-game b { color: #d6698a; }
