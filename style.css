@@ -135,6 +135,9 @@ button.primary:disabled { background: rgba(255, 255, 255, 0.10); color: #6b7180;
 #lobby .nick-line { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 #lobby .nick-line label { font-size: 14px; color: var(--muted); white-space: nowrap; }
 #lobby .nick-line input { flex: 1; margin-bottom: 0; }
+#lobby .nick-display { flex: 1; font-size: 15px; color: var(--text); font-weight: 600; }
+#lobby .nick-edit { padding: 4px 10px; font-size: 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.08); color: var(--accent); border: 1px solid rgba(255, 255, 255, 0.12); cursor: pointer; }
+#lobby .nick-edit:hover { background: rgba(255, 255, 255, 0.15); }
 
 button.ghost {
   background: transparent; color: var(--muted);

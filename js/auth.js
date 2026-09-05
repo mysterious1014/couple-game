@@ -21,6 +21,7 @@ export const Auth = {
       if (r.ok) this.me = await r.json();
     } catch { /* 离线或非登录态 */ }
     this.renderAuthArea();
+    this._notify();
     return this.me;
   },
 
@@ -32,6 +33,7 @@ export const Auth = {
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '登录失败'); }
     this.me = await r.json();
     this.renderAuthArea();
+    this._notify();
     return this.me;
   },
 
@@ -51,6 +53,7 @@ export const Auth = {
     try { await fetch('/api/logout', { method: 'POST' }); } catch {}
     this.me = null;
     this.renderAuthArea();
+    this._notify();
   },
 
   async reportPlay(gameId, gameName, opponent, result, opponentUsername = '') {

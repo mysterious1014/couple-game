@@ -399,14 +399,28 @@ function fmtTime(ts) {
 
 // ---------- 大厅 ----------
 function currentName() {
+  if (Auth.me) return Auth.me.nickname || Auth.me.username;
   const input = $('nickInput');
-  let name = input ? input.value.trim() : '';
-  if (Auth.me) name = Auth.me.nickname || Auth.me.username;
-  return name || '游客';
+  return (input ? input.value.trim() : '') || '游客';
 }
-function setLobbyNick(name) {
+
+function renderNickLine() {
   const input = $('nickInput');
-  if (input) input.value = name;
+  const display = $('nickDisplay');
+  const edit = $('nickEdit');
+  if (!input || !display || !edit) return;
+  if (Auth.me) {
+    input.hidden = true;
+    display.hidden = false;
+    display.textContent = Auth.me.nickname || Auth.me.username;
+    edit.hidden = false;
+    edit.onclick = () => window.__showProfile && window.__showProfile();
+  } else {
+    input.hidden = false;
+    display.hidden = true;
+    edit.hidden = true;
+    input.value = input.value.trim() || '游客';
+  }
 }
 
 $('createBtn').onclick = async () => {
@@ -836,11 +850,10 @@ function initChat() {
 
 // ---------- 启动 ----------
 Auth.onChange((me) => {
+  renderNickLine();
   if (me) {
-    setLobbyNick(me.nickname || me.username);
     reportPresence();                 // 登录后立即上报在线
   } else {
-    setLobbyNick('游客');
     updateFriendBadge();              // 登出后清空红点
   }
 });
