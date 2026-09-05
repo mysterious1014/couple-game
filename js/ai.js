@@ -1,7 +1,14 @@
 // 人机对战模块。
 // AINet 实现了与 Net 相同的接口（me / send / on / isAI / peerName / myName / ready），
 // 但把所有消息路由到本地的「AI 大脑」，无需 PeerJS 连接。
-// 目前支持：五子棋（gomoku）、你画我猜（draw）。
+// 目前支持：五子棋（gomoku）、你画我猜（draw）、黑白棋（reversi）、点格棋（dots）、记忆翻牌（memory）、
+// 海龟汤（turtle）、吹牛（liars）、UNO（uno）。
+
+import { RevLogic } from './games/reversi.js';
+import { DotsLogic } from './games/dots.js';
+import { TurtleLogic } from './games/turtle.js';
+import { UnoLogic } from './games/uno.js';
+import { LiarsLogic, truthProb } from './games/liarsdice.js';
 
 const DIFF_LABEL = { easy: '轻松', medium: '普通', hard: '困难' };
 
@@ -64,9 +71,180 @@ export class AINet {
   }
 }
 
+// ===========================================================================
+// 黑白棋 AI
+// ===========================================================================
+const REV_INIT = (b) => {
+  b[3][3] = 2; b[3][4] = 1; b[4][3] = 1; b[4][4] = 2;
+};
+
+class ReversiBrain {
+  constructor(net, diff) {
+    this.net = net; this.diff = diff;
+    this.board = Array.from({ length: 8 }, () => new Array(8).fill(0));
+    REV_INIT(this.board);
+    this.current = 1; this.over = false; this.timer = null;
+  }
+  onHuman(type, data) {
+    if (type === 'rev_move') {
+      RevLogic.applyAt(this.board, data.r, data.c, data.by);
+      this._advance(data.by);
+      if (!this.over && this.current === 2) this._schedule();
+    } else if (type === 'rev_restart') {
+      this.board = Array.from({ length: 8 }, () => new Array(8).fill(0));
+      REV_INIT(this.board); this.current = 1; this.over = false;
+    }
+  }
+  _advance(mover) {
+    const opp = 3 - mover;
+    if (RevLogic.legalMoves(this.board, opp).length) this.current = opp;
+    else if (RevLogic.legalMoves(this.board, mover).length) { /* mover 继续 */ }
+    else this.over = true;
+  }
+  _schedule() { clearTimeout(this.timer); this.timer = setTimeout(() => this._move(), 350 + Math.random() * 350); }
+  _move() {
+    const mv = this._choose();
+    if (!mv) {
+      if (RevLogic.legalMoves(this.board, 1).length) this.current = 1; else this.over = true;
+      return;
+    }
+    RevLogic.applyAt(this.board, mv.r, mv.c, 2);
+    this.net._emit('rev_move', { r: mv.r, c: mv.c, by: 2 });
+    this._advance(2);
+    if (!this.over && this.current === 2) this._schedule();
+  }
+  _choose() {
+    const moves = RevLogic.legalMoves(this.board, 2);
+    if (!moves.length) return null;
+    if (this.diff === 'easy' && Math.random() < 0.8) return moves[Math.floor(Math.random() * moves.length)];
+    let best = null, bestS = -1e9;
+    for (const m of moves) {
+      const b2 = this.board.map((r) => r.slice());
+      RevLogic.applyAt(b2, m.r, m.c, 2);
+      const opMob = RevLogic.legalMoves(b2, 1).length;
+      const myMob = RevLogic.legalMoves(b2, 2).length;
+      let s = RevLogic.W[m.r][m.c];
+      if (this.diff === 'hard') s -= 2 * opMob + 0.5 * myMob;
+      else if (this.diff === 'medium') s -= opMob;
+      s += Math.random() * 2;
+      if (s > bestS) { bestS = s; best = m; }
+    }
+    return best;
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
+// ===========================================================================
+// 点格棋 AI
+// ===========================================================================
+class DotsBrain {
+  constructor(net, diff) {
+    this.net = net; this.diff = diff;
+    const s = DotsLogic.emptyLines(); this.H = s.H; this.V = s.V; this.boxes = s.boxes;
+    this.current = 1; this.over = false; this.timer = null;
+  }
+  onHuman(type, data) {
+    if (type === 'dots_line') {
+      this._take(data.orient, data.r, data.c, data.by);
+      if (!this.over && this.current === 2) this._schedule();
+    } else if (type === 'dots_restart') {
+      const s = DotsLogic.emptyLines(); this.H = s.H; this.V = s.V; this.boxes = s.boxes;
+      this.current = 1; this.over = false;
+    }
+  }
+  _take(orient, r, c, p) {
+    if (orient === 'h') this.H[r][c] = p; else this.V[r][c] = p;
+    const done = DotsLogic.completeBoxes({ H: this.H, V: this.V, boxes: this.boxes }, orient, r, c, p);
+    done.forEach(([br, bc]) => (this.boxes[br][bc] = p));
+    if (!done.length) this.current = 3 - p;
+    let filled = 0;
+    for (let rr = 0; rr < 5; rr++) for (let cc = 0; cc < 5; cc++) if (this.boxes[rr][cc]) filled++;
+    if (filled >= 25) this.over = true;
+  }
+  _schedule() { clearTimeout(this.timer); this.timer = setTimeout(() => this._move(), 350 + Math.random() * 350); }
+  _any() { return DotsLogic.allLines({ H: this.H, V: this.V, boxes: this.boxes }).length > 0; }
+  _move() {
+    const mv = this._choose();
+    if (!mv) { if (this._any()) this.current = 1; else this.over = true; return; }
+    this.net._emit('dots_line', { orient: mv.orient, r: mv.r, c: mv.c, by: 2 });
+    this._take(mv.orient, mv.r, mv.c, 2);
+    if (!this.over && this.current === 2) this._schedule();
+  }
+  _choose() {
+    const S = { H: this.H, V: this.V, boxes: this.boxes };
+    const lines = DotsLogic.allLines(S);
+    if (!lines.length) return null;
+    const gainers = lines.filter((l) => DotsLogic.completeBoxes(S, l.orient, l.r, l.c, 2).length > 0);
+    if (gainers.length && !(this.diff === 'easy' && Math.random() < 0.5)) {
+      gainers.sort((a, b) => DotsLogic.completeBoxes(S, b.orient, b.r, b.c, 2).length - DotsLogic.completeBoxes(S, a.orient, a.r, a.c, 2).length);
+      return gainers[0];
+    }
+    const safe = lines.filter((l) => DotsLogic.giveBoxes(S, l.orient, l.r, l.c, 1) === 0);
+    const pool = safe.length ? safe : lines;
+    if (this.diff === 'easy' && Math.random() < 0.5) return lines[Math.floor(Math.random() * lines.length)];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
+// ===========================================================================
+// 记忆翻牌 AI（自带完整牌面，靠记忆配对）
+// ===========================================================================
+class MemoryBrain {
+  constructor(net, diff) {
+    this.net = net; this.diff = diff;
+    this.layout = null; this.claimed = new Set(); this.humanFirst = null; this.timer = null;
+  }
+  onHuman(type, data) {
+    if (type === 'mem_init') {
+      this.layout = data.layout.slice(); this.claimed.clear(); this.humanFirst = null;
+    } else if (type === 'mem_flip' && data.by === 1) {
+      if (this.humanFirst === null) this.humanFirst = data.idx;
+      else {
+        const f = this.humanFirst;
+        if (this.layout[f] === this.layout[data.idx]) { this.claimed.add(f); this.claimed.add(data.idx); }
+        else { this.timer = setTimeout(() => this._aiTurn(), 550); }
+        this.humanFirst = null;
+      }
+    }
+  }
+  _aiTurn() {
+    if (!this.layout || this.claimed.size >= 16) return;
+    const avail = [...Array(16).keys()].filter((i) => !this.claimed.has(i));
+    if (avail.length < 2) return;
+    const useSmart = this.diff === 'hard' ? true : this.diff === 'medium' ? Math.random() < 0.7 : Math.random() < 0.3;
+    let a, b;
+    if (useSmart) {
+      const groups = {};
+      avail.forEach((i) => { (groups[this.layout[i]] = groups[this.layout[i]] || []).push(i); });
+      const pair = Object.values(groups).find((g) => g.length >= 2);
+      if (pair) { a = pair[0]; b = pair[1]; }
+    }
+    if (a === undefined) {
+      a = avail[Math.floor(Math.random() * avail.length)];
+      do { b = avail[Math.floor(Math.random() * avail.length)]; } while (b === a);
+    }
+    this.net._emit('mem_flip', { by: 2, idx: a });
+    this.timer = setTimeout(() => {
+      this.net._emit('mem_flip', { by: 2, idx: b });
+      if (this.layout[a] === this.layout[b]) {
+        this.claimed.add(a); this.claimed.add(b);
+        if (this.claimed.size < 16) this.timer = setTimeout(() => this._aiTurn(), 600);
+      }
+    }, 520);
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
 function createBrain(gameId, difficulty, net) {
   if (gameId === 'gomoku') return new GomokuBrain(net, difficulty);
   if (gameId === 'draw') return new DrawBrain(net, difficulty);
+  if (gameId === 'reversi') return new ReversiBrain(net, difficulty);
+  if (gameId === 'dots') return new DotsBrain(net, difficulty);
+  if (gameId === 'memory') return new MemoryBrain(net, difficulty);
+  if (gameId === 'turtle') return new TurtleBrain(net, difficulty);
+  if (gameId === 'liars') return new LiarsBrain(net, difficulty);
+  if (gameId === 'uno') return new UnoBrain(net, difficulty);
   return null;
 }
 
@@ -314,3 +492,140 @@ class DrawBrain {
   _match(g, w) { return g === w || w.includes(g) || g.includes(w); }
   destroy() { clearTimeout(this.timer); }
 }
+
+// ===========================================================================
+// 海龟汤 AI（汤主：知道答案，按关键词回答 / 判定猜测）
+// ===========================================================================
+class TurtleBrain {
+  constructor(net, diff) { this.net = net; this.diff = diff; this.story = null; this.timer = null; }
+  start() {
+    const i = Math.floor(Math.random() * TurtleLogic.stories.length);
+    this.story = TurtleLogic.stories[i];
+    this.net._emit('tt_select', { storyId: this.story.id });
+  }
+  onHuman(type, data) {
+    if (type === 'tt_question') {
+      if (!this.story) return;
+      const ans = TurtleLogic.answer(this.story, data.text || '');
+      const map = { yes: '是', no: '不是', na: '无关', unsure: '不确定，换种问法' };
+      this.net._emit('tt_answer', { text: map[ans] || '不确定，换种问法', type: ans });
+    } else if (type === 'tt_guess') {
+      if (!this.story) return;
+      const correct = TurtleLogic.verify(this.story, data.text || '');
+      this.net._emit('tt_verify', { correct });
+    } else if (type === 'tt_giveup') {
+      this.net._emit('tt_giveup', {});
+    }
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
+// ===========================================================================
+// 吹牛 AI（玩家2 / 蓝方，持有自己的骰子，按概率诈唬或开）
+// ===========================================================================
+class LiarsBrain {
+  constructor(net, diff) {
+    this.net = net; this.diff = diff;
+    this.dice = LiarsLogic.roll5();
+    this.lives = { 1: 3, 2: 3 };
+    this.bid = null; this.over = false; this.timer = null;
+  }
+  applyResult(loser) {
+    this.lives[loser] = Math.max(0, this.lives[loser] - 1);
+    if (this.lives[1] === 0 || this.lives[2] === 0) this.over = true;
+  }
+  bestOpen() {
+    const cnt = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    this.dice.forEach((d) => { cnt[d]++; });
+    let best = 1, mx = 0;
+    for (let f = 1; f <= 6; f++) if (cnt[f] > mx) { mx = cnt[f]; best = f; }
+    return { count: Math.max(2, mx), face: best };
+  }
+  decideRaise(prev) {
+    // 最小合法加叫：同数量升点数，或升数量
+    if (prev.face < 6) return { count: prev.count, face: prev.face + 1 };
+    return { count: prev.count + 1, face: 1 };
+  }
+  onHuman(type, data) {
+    if (this.over) return;
+    if (type === 'ld_start') {
+      this.dice = LiarsLogic.roll5(); this.bid = null;
+      if (data.starter === 2) {
+        const o = this.bestOpen();
+        this.bid = { count: o.count, face: o.face, by: 2 };
+        this.net._emit('ld_bid', this.bid);
+      }
+      return;
+    }
+    if (type === 'ld_bid') {
+      this.bid = data;
+      const p = truthProb(this.dice, data.count, data.face);
+      const thr = this.diff === 'easy' ? 0.25 : this.diff === 'hard' ? 0.5 : 0.4;
+      if (data.count >= 10 || p < thr) {
+        this.net._emit('ld_challenge', { by: 2 });
+      } else {
+        const nb = this.decideRaise(data);
+        this.bid = { count: nb.count, face: nb.face, by: 2 };
+        this.net._emit('ld_bid', this.bid);
+      }
+      return;
+    }
+    if (type === 'ld_challenge') {
+      // 人类(by=1)开 → AI 是 bidder，亮骰
+      this.net._emit('ld_reveal', { dice: this.dice.slice(), player: 2 });
+      return;
+    }
+    if (type === 'ld_reveal') {
+      if (data.player !== 1) return;            // 只有人类(红)亮骰时 AI 才计算
+      if (!this.bid) return;                    // 防御：未叫数不裁判
+      const d1 = data.dice, d2 = this.dice;
+      const loser = LiarsLogic.resolve(this.bid, d1, d2);
+      this.net._emit('ld_result', { loser, dice1: d1, dice2: d2 });
+      this.applyResult(loser);
+      return;
+    }
+    if (type === 'ld_result') {
+      // 人类(挑战方)已计算并广播结果，AI 仅更新本地血量
+      this.applyResult(data.loser);
+      return;
+    }
+    if (type === 'ld_restart') { this.lives = { 1: 3, 2: 3 }; this.over = false; this.bid = null; }
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
+// ===========================================================================
+// UNO AI（权威方：持有完整牌局，处理人类动作后自动出牌）
+// ===========================================================================
+class UnoBrain {
+  constructor(net, diff) { this.net = net; this.diff = diff; this.state = null; this.timer = null; }
+  start() {
+    this.state = UnoLogic.newGame();
+    this.net._emit('uno_state', this.state);
+  }
+  play() {
+    if (!this.state || this.state.winner) return;
+    let guard = 0;
+    while (this.state && this.state.current === 2 && !this.state.winner && guard < 8) {
+      guard++;
+      const action = UnoLogic.chooseAI(this.state, 2, this.diff);
+      UnoLogic.apply(this.state, action);
+      this.net._emit('uno_state', this.state);
+    }
+  }
+  onHuman(type, data) {
+    if (type === 'uno_action') {
+      if (!this.state) return;
+      UnoLogic.apply(this.state, data);
+      this.net._emit('uno_state', this.state);
+      if (this.state.winner) return;
+      if (this.state.current === 2) this.play();
+    } else if (type === 'uno_restart') {
+      this.start();
+    }
+  }
+  destroy() { clearTimeout(this.timer); }
+}
+
+// 供逻辑测试 / 外部复用
+export { TurtleBrain, LiarsBrain, UnoBrain };

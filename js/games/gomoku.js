@@ -2,6 +2,8 @@
 // 15x15 棋盘，任意空位落子，先连成五子(横/竖/斜)者胜。
 // 模块接口：export default { id, name, desc, mount(ctx) -> { destroy } }
 
+import { Sound } from '../sound.js';
+
 const SIZE = 15;
 
 function createBoard() {
@@ -56,6 +58,7 @@ export default {
       if (over || current !== ctx.net.me) return;
       if (board[r][c] !== 0) return;
       board[r][c] = ctx.net.me;
+      Sound.place();
       const won = checkWin(r, c, ctx.net.me);
       if (!won) {
         current = 3 - ctx.net.me;
@@ -82,7 +85,12 @@ export default {
             cnt++; nr += dr * s; nc += dc * s;
           }
         }
-        if (cnt >= 5) { over = true; statusEl.textContent = label(p) + ' 获胜！'; return true; }
+        if (cnt >= 5) {
+          over = true;
+          statusEl.textContent = label(p) + ' 获胜！';
+          finish(p === ctx.net.me ? 'win' : 'lose');
+          return true;
+        }
       }
       return false;
     }
@@ -94,6 +102,7 @@ export default {
       board = createBoard();
       current = 1;
       over = false;
+      finished = false;
       render();
       updateStatus();
     }
@@ -102,9 +111,10 @@ export default {
     offs.push(ctx.net.on('go_move', (m) => {
       if (over) return;
       if (applyMove(m.r, m.c, m.by)) {
+        Sound.place();
         if (!checkWin(m.r, m.c, m.by)) {
           current = 3 - m.by;
-          if (isFull()) { over = true; statusEl.textContent = '平局！'; }
+          if (isFull()) { over = true; statusEl.textContent = '平局！'; finish('draw'); }
         }
         render();
         updateStatus();
@@ -116,6 +126,9 @@ export default {
     render();
     updateStatus();
 
-    return { destroy() { offs.forEach((f) => f()); } };
+    return {
+      destroy() { offs.forEach((f) => f()); },
+      restart() { reset(); ctx.net.send('go_restart'); },
+    };
   },
 };

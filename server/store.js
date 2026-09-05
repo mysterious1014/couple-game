@@ -6,13 +6,13 @@ const path = require('path');
 const file = path.join(__dirname, 'data', 'db.json');
 const tmp = file + '.tmp';
 
-let data = { users: [], sessions: {}, records: [] };
+let data = { users: [], sessions: {}, records: [], friendships: [], blocks: [], messages: [] };
 
 function load() {
   try {
     const raw = fs.readFileSync(file, 'utf8');
     const parsed = JSON.parse(raw);
-    data = Object.assign({ users: [], sessions: {}, records: [] }, parsed);
+    data = Object.assign({ users: [], sessions: {}, records: [], friendships: [], blocks: [], messages: [] }, parsed);
   } catch {
     // 文件不存在或损坏则使用空数据
   }

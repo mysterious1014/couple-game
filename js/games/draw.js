@@ -3,6 +3,8 @@
 // 人机模式（ctx.net.isAI）：AI 当画手，人类猜词；人类猜中后 AI 自动画下一幅。
 // 笔迹用归一化坐标(0~1)传输，适配不同屏幕尺寸。
 
+import { Sound } from '../sound.js';
+
 const WORDS = [
   '猫', '狗', '太阳', '苹果', '雨伞', '飞机', '房子', '星星', '花', '鱼',
   '汽车', '蛋糕', '书', '时钟', '月亮', '树', '手机', '篮球', '眼镜', '帽子',
@@ -69,6 +71,7 @@ export default {
     }
 
     function roundWin(winner) {
+      Sound.match();
       // 人机模式：AI 始终是画手，人类猜中后 AI 直接画下一幅
       if (isAI) {
         score[1] = (score[1] || 0) + 1;
@@ -167,6 +170,21 @@ export default {
     offs.push(ctx.net.on('dw_hint', (m) => addFeed('提示', m.text, false)));
     offs.push(ctx.net.on('dw_ai_say', (m) => addFeed(ctx.net.peerName, m.text, false)));
 
+    function restart() {
+      score = { 1: 0, 2: 0 };
+      clearCanvas();
+      feed.innerHTML = '';
+      if (isAI) {
+        drawer = 2;
+        ctx.net.aiStart();
+      } else {
+        drawer = 1;
+        if (amDrawer()) newWord();
+      }
+      updateInfo();
+      statusEl.textContent = '新的一局开始了！';
+    }
+
     if (isAI) {
       // 人类是猜词方，AI 先画第一幅
       ctx.net.aiStart();
@@ -175,6 +193,6 @@ export default {
     }
     updateInfo();
 
-    return { destroy() { offs.forEach((f) => f()); } };
+    return { destroy() { offs.forEach((f) => f()); }, restart };
   },
 };

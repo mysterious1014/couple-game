@@ -69,12 +69,12 @@ app.post('/api/register', (req, res) => {
   data.users.push({
     id, username, nickname: nickname || username,
     password: hashPassword(password), role: 'user',
-    createdAt: Date.now(), lastLogin: null,
+    score: 1000, createdAt: Date.now(), lastLogin: null,
   });
   const token = newToken();
   data.sessions[token] = id;
   save();
-  res.cookie('sid', token, SESSION_OPTS).json({ id, username, nickname: nickname || username, role: 'user' });
+  res.cookie('sid', token, SESSION_OPTS).json({ id, username, nickname: nickname || username, role: 'user', score: 1000 });
 });
 
 app.post('/api/login', (req, res) => {
@@ -90,7 +90,11 @@ app.post('/api/login', (req, res) => {
 
 app.post('/api/logout', (req, res) => {
   const token = cookieVal(req, 'sid');
-  if (token) delete data.sessions[token];
+  if (token) {
+    const uid = data.sessions[token];
+    if (uid) onlineUsers.delete(uid);
+    delete data.sessions[token];
+  }
   save();
   res.clearCookie('sid');
   res.json({ ok: true });
@@ -99,7 +103,18 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/me', (req, res) => {
   const u = currentUser(req);
   if (!u) return res.status(401).json({ error: '未登录' });
-  res.json({ id: u.id, username: u.username, nickname: u.nickname, role: u.role });
+  let cpPartner = null;
+  if (u.cpPartnerId) {
+    const p = data.users.find((x) => x.id === u.cpPartnerId);
+    if (p) cpPartner = { id: p.id, nickname: p.nickname, username: p.username, score: p.score || 0 };
+  }
+  res.json({
+    id: u.id, username: u.username, nickname: u.nickname, role: u.role, score: u.score || 0,
+    cpPartnerId: u.cpPartnerId || null,
+    cpSince: u.cpSince || null,
+    cpWaiting: !u.cpPartnerId && !!u.cpCode,
+    cpPartner,
+  });
 });
 
 // ---------- 路由：游玩记录 ----------
@@ -109,16 +124,271 @@ app.get('/api/me/records', requireAuth, (req, res) => {
 });
 
 app.post('/api/play', requireAuth, (req, res) => {
-  const { gameId, gameName, opponent, result } = req.body || {};
+  const { gameId, gameName, opponent, result, opponentUsername } = req.body || {};
   if (!gameId || !result) return res.status(400).json({ error: '缺少参数' });
+
+  const delta = result === 'win' ? 20 : result === 'lose' ? -15 : result === 'draw' ? 2 : 0;
+  req.user.score = (req.user.score || 1000) + delta;
+
   const rec = {
     id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     userId: req.user.id, username: req.user.username,
-    gameId, gameName: gameName || gameId, opponent: opponent || '', result, ts: Date.now(),
+    gameId, gameName: gameName || gameId, opponent: opponent || '', opponentUsername: opponentUsername || '', result, ts: Date.now(),
+    delta,
   };
   data.records.push(rec);
   save();
+  res.json({ ok: true, score: req.user.score, delta });
+});
+
+// ---------- 路由：好友与在线状态 ----------
+const ONLINE_TTL = 90 * 1000;        // 90 秒内无心跳视为离线
+const onlineUsers = new Map();       // uid -> { lastSeen, roomCode }
+
+function findRel(a, b) {
+  return data.friendships.find((f) =>
+    (f.userA === a && f.userB === b) || (f.userA === b && f.userB === a));
+}
+function findBlock(blockerId, blockedId) {
+  return data.blocks.find((b) => b.blockerId === blockerId && b.blockedId === blockedId);
+}
+function publicProfile(uid) {
+  const u = data.users.find((x) => x.id === uid);
+  if (!u) return null;
+  const p = onlineUsers.get(uid);
+  const online = !!(p && Date.now() - p.lastSeen < ONLINE_TTL);
+  return {
+    id: u.id, username: u.username, nickname: u.nickname,
+    score: u.score || 0, role: u.role,
+    online, roomCode: online ? (p.roomCode || null) : null,
+  };
+}
+
+// 在线状态心跳（登录后由前端定时上报；退出/离线时带 offline:true）
+app.post('/api/presence', requireAuth, (req, res) => {
+  const { roomCode, offline } = req.body || {};
+  if (offline) { onlineUsers.delete(req.user.id); return res.json({ ok: true }); }
+  onlineUsers.set(req.user.id, { lastSeen: Date.now(), roomCode: roomCode || null });
   res.json({ ok: true });
+});
+
+// 好友列表 / 收到的请求 / 发出的请求
+app.get('/api/friends', requireAuth, (req, res) => {
+  const me = req.user.id;
+  const friends = [], incoming = [], outgoing = [];
+  for (const f of data.friendships) {
+    if (f.status === 'accepted') {
+      const other = f.userA === me ? f.userB : f.userA;
+      const prof = publicProfile(other);
+      if (prof) {
+        prof.note = f.note || '';
+        prof.group = f.group || '';
+        friends.push(prof);
+      }
+    } else if (f.status === 'pending') {
+      if (f.requester !== me) {
+        const prof = publicProfile(f.requester);
+        if (prof) incoming.push(prof);
+      } else {
+        const other = f.userA === me ? f.userB : f.userA;
+        const prof = publicProfile(other);
+        if (prof) outgoing.push(prof);
+      }
+    }
+  }
+  friends.sort((a, b) => (Number(b.online) - Number(a.online)) || (a.nickname || '').localeCompare(b.nickname || '', 'zh'));
+  const blocks = data.blocks
+    .filter((b) => b.blockerId === me)
+    .map((b) => publicProfile(b.blockedId))
+    .filter(Boolean);
+  res.json({ friends, incoming, outgoing, blocks, pendingCount: incoming.length });
+});
+
+// 发送好友请求（按用户名）
+app.post('/api/friends/request', requireAuth, (req, res) => {
+  const { username } = req.body || {};
+  if (!username) return res.status(400).json({ error: '请输入用户名' });
+  const target = data.users.find((u) => u.username === username);
+  if (!target) return res.status(404).json({ error: '用户不存在' });
+  if (target.id === req.user.id) return res.status(400).json({ error: '不能添加自己为好友' });
+  if (findBlock(target.id, req.user.id)) return res.status(403).json({ error: '对方已屏蔽你，无法发送请求' });
+  const rel = findRel(req.user.id, target.id);
+  if (rel) {
+    if (rel.status === 'accepted') return res.status(400).json({ error: '你们已经是好友了' });
+    if (rel.requester === req.user.id) return res.status(400).json({ error: '好友请求已发送，等待对方通过' });
+    return res.status(400).json({ error: '对方已向你发送好友请求，请到「好友请求」中通过' });
+  }
+  data.friendships.push({
+    id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    userA: req.user.id, userB: target.id, status: 'pending', requester: req.user.id, createdAt: Date.now(),
+  });
+  save();
+  res.json({ ok: true });
+});
+
+// 接受好友请求
+app.post('/api/friends/accept', requireAuth, (req, res) => {
+  const { userId } = req.body || {};
+  const rel = findRel(req.user.id, userId);
+  if (!rel || rel.status !== 'pending' || rel.requester === req.user.id)
+    return res.status(400).json({ error: '没有待通过的好友请求' });
+  rel.status = 'accepted';
+  save();
+  res.json({ ok: true });
+});
+
+// 删除关系：拒绝收到的请求 / 取消发出的请求 / 移除好友（均按对方 userId 删除）
+app.delete('/api/friends/:userId', requireAuth, (req, res) => {
+  const rel = findRel(req.user.id, req.params.userId);
+  if (!rel) return res.status(404).json({ error: '关系不存在' });
+  data.friendships = data.friendships.filter((x) => x !== rel);
+  save();
+  res.json({ ok: true });
+});
+
+// 修改好友备注 / 分组
+app.patch('/api/friends/:userId', requireAuth, (req, res) => {
+  const rel = findRel(req.user.id, req.params.userId);
+  if (!rel || rel.status !== 'accepted') return res.status(404).json({ error: '好友关系不存在' });
+  const { note, group } = req.body || {};
+  if (typeof note === 'string') rel.note = note.slice(0, 30);
+  if (typeof group === 'string') rel.group = group.slice(0, 12);
+  save();
+  res.json({ ok: true, note: rel.note, group: rel.group });
+});
+
+// ---------- 路由：黑名单 ----------
+// 拉黑某用户（按用户名）
+app.post('/api/blocks', requireAuth, (req, res) => {
+  const { username } = req.body || {};
+  if (!username) return res.status(400).json({ error: '请输入用户名' });
+  const target = data.users.find((u) => u.username === username);
+  if (!target) return res.status(404).json({ error: '用户不存在' });
+  if (target.id === req.user.id) return res.status(400).json({ error: '不能拉黑自己' });
+  if (findBlock(req.user.id, target.id)) return res.status(400).json({ error: '已经在黑名单中' });
+  // 拉黑的同时解除好友关系（如有）
+  data.friendships = data.friendships.filter((x) => !(x.userA === req.user.id && x.userB === target.id) && !(x.userB === req.user.id && x.userA === target.id));
+  data.blocks.push({
+    id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    blockerId: req.user.id, blockedId: target.id, createdAt: Date.now(),
+  });
+  save();
+  res.json({ ok: true });
+});
+
+// 解除拉黑
+app.delete('/api/blocks/:userId', requireAuth, (req, res) => {
+  const rel = findBlock(req.user.id, req.params.userId);
+  if (!rel) return res.status(404).json({ error: '黑名单中无此用户' });
+  data.blocks = data.blocks.filter((x) => x !== rel);
+  save();
+  res.json({ ok: true });
+});
+
+// ---------- 路由：情侣绑定（CP） ----------
+// 双方约定同一个情侣码，先输入的一方进入「等待」，后输入相同码的一方与之绑定。
+app.post('/api/cp/bind', requireAuth, (req, res) => {
+  const { code } = req.body || {};
+  const c = (code || '').trim();
+  if (!c) return res.status(400).json({ error: '请输入情侣码' });
+  if (req.user.cpPartnerId) return res.status(400).json({ error: '你们已经是 CP 啦，先解绑再重新绑定' });
+  // 找一位同样输入了该码、且尚未绑定他人的用户作为另一半
+  const partner = data.users.find((u) => u.cpCode === c && !u.cpPartnerId && u.id !== req.user.id);
+  if (partner) {
+    const since = Date.now();
+    req.user.cpPartnerId = partner.id;
+    req.user.cpSince = since;
+    req.user.cpCode = '';
+    partner.cpPartnerId = req.user.id;
+    partner.cpSince = since;
+    partner.cpCode = '';
+    save();
+    return res.json({ ok: true, partner: { id: partner.id, nickname: partner.nickname, username: partner.username } });
+  }
+  // 没有匹配的另一半：进入等待（持有该情侣码）
+  req.user.cpCode = c;
+  save();
+  res.json({ ok: true, waiting: true });
+});
+
+app.post('/api/cp/unbind', requireAuth, (req, res) => {
+  const me = req.user;
+  const partner = me.cpPartnerId ? data.users.find((u) => u.id === me.cpPartnerId) : null;
+  me.cpPartnerId = null;
+  me.cpSince = null;
+  me.cpCode = '';
+  if (partner) { partner.cpPartnerId = null; partner.cpSince = null; partner.cpCode = ''; }
+  save();
+  res.json({ ok: true });
+});
+
+// ---------- 路由：好友私信 + 房间邀请 ----------
+// 发送私信 / 邀请（仅限互为好友；拉黑关系不可发送）
+app.post('/api/messages', requireAuth, (req, res) => {
+  const { toUserId, type, text, roomCode, gameName } = req.body || {};
+  if (!toUserId) return res.status(400).json({ error: '缺少接收人' });
+  if (type !== 'chat' && type !== 'invite') return res.status(400).json({ error: '消息类型错误' });
+  const target = data.users.find((u) => u.id === toUserId);
+  if (!target) return res.status(404).json({ error: '用户不存在' });
+  if (findBlock(target.id, req.user.id) || findBlock(req.user.id, target.id)) {
+    return res.status(403).json({ error: '无法给该用户发送消息' });
+  }
+  if (!findRel(req.user.id, target.id) || findRel(req.user.id, target.id).status !== 'accepted') {
+    return res.status(403).json({ error: '只能给好友发送消息' });
+  }
+  const msg = {
+    id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    fromId: req.user.id, toId: target.id, type,
+    text: type === 'chat' ? (text || '').slice(0, 200) : '',
+    roomCode: type === 'invite' ? (roomCode || '') : '',
+    gameName: type === 'invite' ? (gameName || '') : '',
+    ts: Date.now(), read: false,
+  };
+  if (type === 'chat' && !msg.text) return res.status(400).json({ error: '消息内容不能为空' });
+  data.messages.push(msg);
+  save();
+  res.json({ ok: true });
+});
+
+// 与某好友的会话记录（拉取后标记已读）
+app.get('/api/messages', requireAuth, (req, res) => {
+  const peer = req.query.peer;
+  if (!peer) return res.status(400).json({ error: '缺少 peer' });
+  const list = data.messages
+    .filter((m) => (m.fromId === req.user.id && m.toId === peer) || (m.fromId === peer && m.toId === req.user.id))
+    .sort((a, b) => a.ts - b.ts)
+    .slice(-200);
+  list.forEach((m) => { if (m.toId === req.user.id) m.read = true; });
+  save();
+  res.json(list);
+});
+
+// 拉取未读消息（用于轮询弹通知）；拉取后标记已读
+app.get('/api/messages/unread', requireAuth, (req, res) => {
+  const list = data.messages.filter((m) => m.toId === req.user.id && !m.read);
+  list.forEach((m) => { m.read = true; });
+  save();
+  const items = list.map((m) => {
+    const from = data.users.find((u) => u.id === m.fromId);
+    return {
+      id: m.id, fromId: m.fromId, fromName: from ? (from.nickname || from.username) : '好友',
+      type: m.type, text: m.text,
+      roomCode: m.roomCode, gameName: m.gameName, ts: m.ts,
+    };
+  });
+  res.json({ count: items.length, items });
+});
+
+// ---------- 路由：排行榜 ----------
+app.get('/api/leaderboard', (req, res) => {
+  const list = data.users
+    .filter((u) => u.role !== 'admin')
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, 50)
+    .map((u, i) => ({
+      rank: i + 1, id: u.id, nickname: u.nickname, username: u.username, score: u.score || 0,
+    }));
+  res.json(list);
 });
 
 // ---------- 路由：房间 ----------
@@ -134,19 +404,44 @@ function allocateRoomCode() {
   return null;
 }
 
+app.get('/api/rooms', (req, res) => {
+  const list = Object.values(rooms)
+    .filter((r) => !r.password && r.status === 'waiting')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 50)
+    .map((r) => ({
+      code: r.code,
+      hostName: r.hostName || '房主',
+      players: r.players || 1,
+      maxPlayers: 2,
+      status: r.status || 'waiting',
+      gameId: r.gameId || '',
+      gameName: r.gameName || '',
+    }));
+  res.json(list);
+});
+
 app.post('/api/rooms', (req, res) => {
-  const { peerId, hostName } = req.body || {};
+  const { peerId, hostName, gameId, gameName } = req.body || {};
   if (!peerId) return res.status(400).json({ error: '缺少 peerId' });
   const code = allocateRoomCode();
   if (!code) return res.status(503).json({ error: '房间号已用完' });
-  rooms[code] = { code, peerId, password: '', hostName: hostName || '', createdAt: Date.now() };
+  rooms[code] = {
+    code, peerId, password: '',
+    hostName: hostName || '',
+    players: 1,
+    status: 'waiting',
+    gameId: gameId || '',
+    gameName: gameName || '',
+    createdAt: Date.now(),
+  };
   res.json({ code, room: rooms[code] });
 });
 
 app.get('/api/rooms/:code', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  res.json({ code: room.code, peerId: room.peerId, hasPassword: !!room.password, hostName: room.hostName });
+  res.json({ code: room.code, peerId: room.peerId, hasPassword: !!room.password, hostName: room.hostName, status: room.status });
 });
 
 app.post('/api/rooms/:code/join', (req, res) => {
@@ -155,14 +450,18 @@ app.post('/api/rooms/:code/join', (req, res) => {
   if (room.password && room.password !== (req.body.password || '')) {
     return res.status(403).json({ error: '密码错误' });
   }
-  res.json({ code: room.code, peerId: room.peerId, hostName: room.hostName });
+  room.players = Math.min((room.players || 1) + 1, 2);
+  res.json({ code: room.code, peerId: room.peerId, hostName: room.hostName, gameId: room.gameId, gameName: room.gameName });
 });
 
 app.patch('/api/rooms/:code', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  const { password } = req.body || {};
+  const { password, gameId, gameName, status } = req.body || {};
   if (typeof password === 'string') room.password = password;
+  if (typeof gameId === 'string') room.gameId = gameId;
+  if (typeof gameName === 'string') room.gameName = gameName;
+  if (typeof status === 'string' && ['waiting', 'playing'].includes(status)) room.status = status;
   res.json({ ok: true });
 });
 
@@ -183,7 +482,7 @@ setInterval(() => {
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const users = data.users.map((u) => ({
     id: u.id, username: u.username, nickname: u.nickname, role: u.role,
-    createdAt: u.createdAt, lastLogin: u.lastLogin,
+    score: u.score || 0, createdAt: u.createdAt, lastLogin: u.lastLogin,
     playCount: data.records.filter((r) => r.userId === u.id).length,
   }));
   res.json(users);
@@ -224,13 +523,23 @@ function seedAdmin() {
   data.users.push({
     id: 'admin', username: 'admin', nickname: '管理员',
     password: hashPassword('888888'), role: 'admin',
-    createdAt: Date.now(), lastLogin: null,
+    score: 99999, createdAt: Date.now(), lastLogin: null,
   });
   save();
   console.log('已创建默认管理员账号：admin / 888888（请尽快修改密码）');
 }
 
 seedAdmin();
+
+// 旧用户积分迁移：没有 score 字段的默认 1000
+let migrated = false;
+data.users.forEach((u) => {
+  if (typeof u.score !== 'number') { u.score = 1000; migrated = true; }
+  if (u.cpPartnerId === undefined) u.cpPartnerId = null;
+  if (u.cpSince === undefined) u.cpSince = null;
+  if (u.cpCode === undefined) u.cpCode = '';
+});
+if (migrated) save();
 
 // 自建 PeerJS 信令服务器（与 Express 同端口，路径 /peerjs）
 // 避免使用 PeerJS 默认国外云信令，解决国内创建房间卡住的问题

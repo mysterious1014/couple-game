@@ -37,7 +37,9 @@ export class Net {
     this.conn = null;
     this.me = null;
     this.myName = '我';
+    this.myUsername = '';
     this.peerName = '对方';
+    this.peerUsername = '';
     this._isHost = false;
     this._handlers = {};
     this._status = [];
@@ -47,10 +49,11 @@ export class Net {
   }
 
   // 房主：创建 Peer -> 后端注册 4 位房间号 -> 等待连接
-  async host(name) {
+  async host(name, username = '') {
     this._cleanup();
     this._isHost = true;
     this.myName = name || '房主';
+    this.myUsername = username || '';
     this.peer = new Peer(undefined, peerOptions());
 
     // 等待 PeerJS open，最多 8 秒；超时报错让用户重试
@@ -78,10 +81,11 @@ export class Net {
   }
 
   // 加入者：查询房间 -> 校验密码 -> 获取真实 PeerID -> 连接
-  async join(code, name, password = '') {
+  async join(code, name, password = '', username = '') {
     this._cleanup();
     this._isHost = false;
     this.myName = name || '玩家';
+    this.myUsername = username || '';
     this.roomCode = code;
 
     const r = await fetch(`/api/rooms/${encodeURIComponent(code)}/join`, {
@@ -130,7 +134,7 @@ export class Net {
       called = true;
       this.me = this._isHost ? 1 : 2;
       this.ready = true;
-      this.send('hello', { name: this.myName });
+      this.send('hello', { name: this.myName, username: this.myUsername });
       this._emit('connected');
       if (onOpen) onOpen();
     };
@@ -144,6 +148,7 @@ export class Net {
     if (!m || !m.type) return;
     if (m.type === 'hello') {
       this.peerName = m.name || '对方';
+      this.peerUsername = m.username || '';
       this._emit('peername', this.peerName);
       return;
     }

@@ -8,16 +8,33 @@
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body data-page-node-id="P0wclCKaPmFu1bEEFMcskI">
+  <!-- 三丽鸥风格可爱背景装饰（通用萌系图形，非具体角色） -->
+  <div id="decoBg" aria-hidden="true">
+    <svg class="deco d1" viewBox="0 0 32 29"><path d="M16 28S3 20 3 11.5C3 6.7 6.8 3 11 3c2.9 0 5 2.2 5 2.2S18.1 3 21 3c4.2 0 8 3.7 8 8.5C29 20 16 28 16 28z" fill="#ff9ec4"/></svg>
+    <svg class="deco d2" viewBox="0 0 32 29"><path d="M16 28S3 20 3 11.5C3 6.7 6.8 3 11 3c2.9 0 5 2.2 5 2.2S18.1 3 21 3c4.2 0 8 3.7 8 8.5C29 20 16 28 16 28z" fill="#ffc2dd"/></svg>
+    <svg class="deco d3" viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z" fill="#ffd1e8"/></svg>
+    <svg class="deco d4" viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z" fill="#ffe0c8"/></svg>
+    <svg class="deco d5" viewBox="0 0 40 28"><path d="M20 14 4 4 4 24Z" fill="#ffb0d3"/><path d="M20 14 36 4 36 24Z" fill="#ffb0d3"/><circle cx="20" cy="14" r="4.5" fill="#ff7eb3"/></svg>
+    <svg class="deco d6" viewBox="0 0 40 24"><path d="M12 22a8 8 0 0 1 0-16 9 9 0 0 1 17 1 7 7 0 0 1 2 15z" fill="#ffd9ec"/></svg>
+    <svg class="deco d7" viewBox="0 0 24 24"><path d="M12 0c1 8 4 11 12 12-8 1-11 4-12 12-1-8-4-11-12-12 8-1 11-4 12-12z" fill="#fff0a8"/></svg>
+    <svg class="deco d8" viewBox="0 0 24 24"><path d="M12 0c1 8 4 11 12 12-8 1-11 4-12 12-1-8-4-11-12-12 8-1 11-4 12-12z" fill="#ffd1e8"/></svg>
+    <svg class="deco d9" viewBox="0 0 32 29"><path d="M16 28S3 20 3 11.5C3 6.7 6.8 3 11 3c2.9 0 5 2.2 5 2.2S18.1 3 21 3c4.2 0 8 3.7 8 8.5C29 20 16 28 16 28z" fill="#ffb0d3"/></svg>
+  </div>
   <!-- 顶栏 -->
   <header class="topbar" data-page-node-id="E2sE803hZDSCyFtcEFFIIi">
     <span class="brand" data-page-node-id="ORd78eQg0Aag0HZy3ql7no">我们的游戏站</span>
-    <div id="authArea" class="auth-area" data-page-node-id="QJssFnAbSHhwMGuFEMcqY7"></div>
+    <div class="topbar-right">
+      <button id="rankToggle" class="icon-btn" title="排行榜" aria-label="排行榜">🏆</button>
+      <button id="soundToggle" class="icon-btn" aria-label="关闭音效">🔊</button>
+      <div id="authArea" class="auth-area" data-page-node-id="QJssFnAbSHhwMGuFEMcqY7"></div>
+    </div>
   </header>
 
   <div id="app" data-page-node-id="XZEQ2VHvVya5wxkBxtUk1P">
     <!-- 大厅 -->
     <section id="lobby" data-page-node-id="vez73TMaTwzMn5N8ykkaeJ">
       <p class="tip" data-page-node-id="Tky0vG89mGhpKcEcIXHjkD">和 TA 异地也能同屏对战——把 4 位房间号发给对方即可。一个人也不怕，叫上电脑陪你玩。</p>
+      <div id="cpBanner" class="cp-banner" hidden></div>
       <p id="lobbyHint" class="hint" data-page-node-id="sckSnaFxaQYgvB32LJAsVy"></p>
       <div class="nick-line" data-page-node-id="cPG9F0BIqbqXZZ8zV6RpB0">
         <label data-page-node-id="ZGL9Y2D5TPViTwD0XkfqVf">我的昵称：</label>
@@ -27,6 +44,13 @@
       <div class="join" data-page-node-id="G5c6QUY6JzbLB23hyarfcr">
         <input id="roomInput" placeholder="输入4位房间号" maxlength="4" inputmode="numeric" data-page-node-id="N2QAc5dKObmp9XscLJFPAY" />
         <button id="joinBtn" data-page-node-id="hp8tB7phGqQJ57AO9OMxvk">加入</button>
+      </div>
+      <div class="public-rooms" data-page-node-id="publicRoomsPanel">
+        <div class="pr-head" data-page-node-id="publicRoomsHead">
+          <h3 data-page-node-id="publicRoomsTitle">公开房间</h3>
+          <span id="prStatus" class="pr-status" data-page-node-id="publicRoomsStatus">加载中…</span>
+        </div>
+        <div id="publicRoomList" class="pr-list" data-page-node-id="publicRoomList"></div>
       </div>
       <button id="vsAIBtn" class="ghost solo" data-page-node-id="vsAIBtnNode">一个人？和电脑玩 →</button>
     </section>
@@ -47,6 +71,8 @@
             <span id="guestName" class="p-name empty" data-page-node-id="RTkC3QZ0mGHG8QqKbCTtMO">等待对方加入…</span><span id="guestTag" class="p-tag" hidden data-page-node-id="EgVnenKo4DAPLahbWe4BPL">玩家</span>
           </div>
         </div>
+        <button id="addAIBtn" class="add-ai" hidden>+ 邀请电脑玩家</button>
+        <button id="removeAIBtn" class="remove-ai" hidden>× 移除电脑玩家</button>
       </div>
 
       <!-- 房主设置面板 -->
@@ -91,15 +117,42 @@
 
     <!-- 管理后台 -->
     <section id="admin" hidden data-page-node-id="CAjpRvB3UQ4MNhKiNvdCOi"></section>
+
+    <!-- 排行榜 -->
+    <section id="rank" hidden data-page-node-id="rankMain"></section>
+
+    <!-- 好友 -->
+    <section id="friends" hidden data-page-node-id="frndMain"></section>
   </div>
 
   <!-- 浮动聊天 -->
   <div id="chatPanel" class="chat-panel" hidden data-page-node-id="OSUVGALOkPdktPmO0uvoru">
-    <div class="chat-head" data-page-node-id="LSeg8Rs5USQxSiaMEFbexq">悄悄话</div>
+    <div class="chat-head" data-page-node-id="LSeg8Rs5USQxSiaMEFbexq">
+      <span class="chat-title">悄悄话</span>
+      <span class="chat-actions">
+        <button id="chatMin" class="chat-ico" type="button" title="缩小/展开" aria-label="缩小">▾</button>
+        <button id="chatClose" class="chat-ico" type="button" title="关闭" aria-label="关闭">×</button>
+      </span>
+    </div>
     <div id="chatLog" class="chat-log" data-page-node-id="meNe1Ol5v7ZcFivaJvxwI0"></div>
     <div class="chat-input" data-page-node-id="3dEbACnNewFhiCT8IS9C5T">
       <input id="chatInput" placeholder="说点什么…" maxlength="120" data-page-node-id="GarzG0gbky8aHYB2gRAGlS" />
       <button id="chatSend" data-page-node-id="HngCjRb6ETb3wxVWoGvMKC">发送</button>
+    </div>
+  </div>
+  <button id="chatLauncher" class="chat-launcher" type="button" hidden>💬 悄悄话</button>
+
+  <!-- 游戏结算弹窗 -->
+  <div id="resultModal" class="modal result-modal" hidden>
+    <div class="modal-box">
+      <div id="resultAnim" class="result-anim"></div>
+      <h2 id="resultTitle">胜利！</h2>
+      <p id="resultDesc" class="result-desc">恭喜赢得本场比赛</p>
+      <div id="resultScore" class="result-score">+20 积分</div>
+      <div class="result-actions">
+        <button id="resultReplay" class="primary">再来一局</button>
+        <button id="resultBack" class="ghost">返回房间</button>
+      </div>
     </div>
   </div>
 
@@ -129,22 +182,74 @@
     <div class="modal-box" data-page-node-id="62bporoMbvQolmBMih1DMK">
       <button id="authClose" class="modal-close" data-page-node-id="IYbsDynpV5TmK40sVouqQD">×</button>
       <h2 id="authTitle" data-page-node-id="YAoAQHirBI7RwSubrnO8BD">登录</h2>
-      <form id="loginForm" onsubmit="return false" data-page-node-id="NCcco4WmAW4gweOPCb4b0F">
-        <input id="loginUser" placeholder="用户名" maxlength="20" data-page-node-id="Db6bzu08cBpDaxden4i8B1" />
-        <input id="loginPass" type="password" placeholder="密码" data-page-node-id="bgCvFhgxbiKudiE4Ag6seh" />
-        <button id="loginSubmit" class="primary" data-page-node-id="7SsTquP87BVXeFRxACt2yP">登录</button>
-        <p id="loginErr" class="err" data-page-node-id="ubE4LtQa6LijtSMj4EzM8O"></p>
-      </form>
-      <form id="regForm" hidden onsubmit="return false" data-page-node-id="Wlns08AxrTFcmAP8Wz1FuV">
-        <input id="regUser" placeholder="用户名（3-20位字母/数字/下划线）" maxlength="20" data-page-node-id="Gwsg7XJ9g1ovBTASLzZCVu" />
-        <input id="regPass" type="password" placeholder="密码（至少6位）" data-page-node-id="McMdHIZedv4WrOfrXlkLmk" />
-        <input id="regNick" placeholder="昵称（选填）" maxlength="12" data-page-node-id="SalClj6BQsUeCyG3u342hH" />
-        <button id="regSubmit" class="primary" data-page-node-id="nbK6UdcZOPkfzmUSCWiZRJ">注册并登录</button>
-        <p id="regErr" class="err" data-page-node-id="ls6V5ACFEepYOyBphfKINs"></p>
-      </form>
+      <div id="authForms" class="auth-forms">
+        <form id="loginForm" class="active" onsubmit="return false" data-page-node-id="NCcco4WmAW4gweOPCb4b0F">
+          <input id="loginUser" placeholder="用户名" maxlength="20" data-page-node-id="Db6bzu08cBpDaxden4i8B1" />
+          <div class="pwd-wrap">
+            <input id="loginPass" type="password" placeholder="密码" data-page-node-id="bgCvFhgxbiKudiE4Ag6seh" />
+            <button type="button" class="eye" data-eye-for="loginPass" aria-label="显示密码">👁</button>
+          </div>
+          <button id="loginSubmit" class="primary" data-page-node-id="7SsTquP87BVXeFRxACt2yP">登录</button>
+          <p id="loginErr" class="err" data-page-node-id="ubE4LtQa6LijtSMj4EzM8O"></p>
+        </form>
+        <form id="regForm" onsubmit="return false" data-page-node-id="Wlns08AxrTFcmAP8Wz1FuV">
+          <input id="regUser" placeholder="用户名（3-20位字母/数字/下划线）" maxlength="20" data-page-node-id="Gwsg7XJ9g1ovBTASLzZCVu" />
+          <div class="pwd-wrap">
+            <input id="regPass" type="password" placeholder="密码（至少6位）" data-page-node-id="McMdHIZedv4WrOfrXlkLmk" />
+            <button type="button" class="eye" data-eye-for="regPass" aria-label="显示密码">👁</button>
+          </div>
+          <div id="pwdStrength" class="pwd-strength" aria-live="polite"></div>
+          <div class="pwd-wrap">
+            <input id="regPass2" type="password" placeholder="确认密码" />
+            <button type="button" class="eye" data-eye-for="regPass2" aria-label="显示密码">👁</button>
+          </div>
+          <input id="regNick" placeholder="昵称（选填）" maxlength="12" data-page-node-id="SalClj6BQsUeCyG3u342hH" />
+          <button id="regSubmit" class="primary" data-page-node-id="nbK6UdcZOPkfzmUSCWiZRJ">注册并登录</button>
+          <p id="regErr" class="err" data-page-node-id="ls6V5ACFEepYOyBphfKINs"></p>
+        </form>
+      </div>
       <p id="authSwitch" class="switch" data-page-node-id="GRxD5TCATDsR8RK51FiItX"></p>
     </div>
   </div>
+
+  <!-- 情侣绑定弹窗 -->
+  <div id="cpModal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="cpClose" class="modal-close">×</button>
+      <h2 id="cpTitle">绑定情侣 ❤️</h2>
+      <p class="cp-sub" id="cpSub">和 TA 约定一组「情侣码」（任意文字，比如你们的纪念日是几号），双方都输入相同的一串，就能绑定成功。</p>
+      <input id="cpInput" class="cp-input" placeholder="输入情侣码" maxlength="24" />
+      <p id="cpMsg" class="hint"></p>
+      <button id="cpBindBtn" class="primary">绑定</button>
+      <p class="cp-tip">绑定后，首页会显示「在一起 N 天」，你们的每一场对局都会被标记为 CP 对局 💕</p>
+    </div>
+  </div>
+
+  <!-- 战绩明细弹窗 -->
+  <div id="recModal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="recClose" class="modal-close">×</button>
+      <h2 id="recTitle">对局详情</h2>
+      <div id="recBody" class="rec-detail"></div>
+      <button id="recBack" class="ghost">关闭</button>
+    </div>
+  </div>
+
+  <!-- 好友私聊弹窗 -->
+  <div id="chatModal" class="modal" hidden>
+    <div class="modal-box chat-modal">
+      <button id="chatModalClose" class="modal-close">×</button>
+      <h2 id="chatModalTitle">私聊</h2>
+      <div id="chatModalLog" class="chat-modal-log"></div>
+      <div class="chat-modal-input">
+        <input id="chatModalInput" placeholder="说点什么…" maxlength="200" />
+        <button id="chatModalSend">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 邀请/私信通知区 -->
+  <div id="notifyArea" class="notify-area"></div>
 
   <script type="module" src="js/app.js"></script>
 </body>
