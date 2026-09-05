@@ -53,11 +53,29 @@ let currentGame = null;
 let selectedGameId = '';
 let roomPasswordSet = false;
 let publicRoomTimer = null;
+let roomHeartbeatTimer = null;  // 房主房间心跳
+let roomOwnedCode = null;      // 当前持有的真实房间号（用于页面关闭时清理）
 
 async function serverDeleteRoom(code) {
   try {
     await fetch(`/api/rooms/${code}`, { method: 'DELETE' });
   } catch { /* 忽略 */ }
+}
+
+function startRoomHeartbeat(code) {
+  stopRoomHeartbeat();
+  roomOwnedCode = code;
+  const ping = () => {
+    if (!roomOwnedCode) return;
+    fetch(`/api/rooms/${roomOwnedCode}/heartbeat`, { method: 'POST' }).catch(() => {});
+  };
+  ping();
+  roomHeartbeatTimer = setInterval(ping, 30 * 1000);
+}
+
+function stopRoomHeartbeat() {
+  if (roomHeartbeatTimer) { clearInterval(roomHeartbeatTimer); roomHeartbeatTimer = null; }
+  roomOwnedCode = null;
 }
 
 async function serverPatchRoom(code, patch) {
@@ -77,6 +95,7 @@ function showLobby() {
   if (net && net.isHost && net.roomCode && !net.isAI) {
     serverDeleteRoom(net.roomCode);
   }
+  stopRoomHeartbeat();             // 停止房主心跳
   reportPresence(null);            // 离开房间，清除「所在房间」状态
   hideAll(); lobby.hidden = false;
   chatPanel.hidden = true;
@@ -391,6 +410,11 @@ function setLobbyNick(name) {
 }
 
 $('createBtn').onclick = async () => {
+  if (!Auth.me) {
+    $('lobbyHint').textContent = '创建公开房间请先登录，或选择和电脑玩 / 输入房间号加入';
+    openAuth('login');
+    return;
+  }
   net = realNet;
   $('createBtn').disabled = true;
   $('lobbyHint').textContent = '正在创建房间…';
@@ -595,6 +619,9 @@ function enterRoom(code) {
       setTimeout(() => (btn.textContent = old), 1500);
     });
   };
+
+  // 房主启动心跳，保持房间不被 GC 清理；页面关闭时也会尝试清理
+  if (!net.isAI && net.isHost && net.roomCode) startRoomHeartbeat(net.roomCode);
 
   // 上报在线状态与所在房间，让好友在列表里看到「在房间 XXXX」
   reportPresence(net.isAI ? null : net.roomCode);
@@ -860,3 +887,10 @@ function escapeHtml(s) {
 // 初始进入页面时拉取一次公开房间
 loadPublicRooms();
 startPublicRoomPolling();
+
+// 页面关闭/刷新前，若当前持有真实房间，尝试立刻通知后端清理（避免房主直接关标签导致残留）
+window.addEventListener('beforeunload', () => {
+  if (roomOwnedCode) {
+    try { navigator.sendBeacon && navigator.sendBeacon(`/api/rooms/${roomOwnedCode}/close`, new Blob([], { type: 'application/json' })); } catch {}
+  }
+});

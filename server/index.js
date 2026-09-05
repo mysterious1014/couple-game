@@ -392,8 +392,13 @@ app.get('/api/leaderboard', (req, res) => {
 });
 
 // ---------- 路由：房间 ----------
-const rooms = {}; // code -> { code, peerId, password, hostName, createdAt }
+// 内存房间表（重启丢失），房主必须保持心跳，掉线/退出后房间自动消失。
+// 结构：code -> { code, peerId, password, hostName, players, status, gameId, gameName,
+//                 createdAt, lastHeartbeat, public, hostUserId }
+const rooms = {};
 let nextRoomCode = 1;
+const ROOM_HEARTBEAT_MS = 90 * 1000;        // 房主 90 秒内心跳，否则视为离线删房
+const ROOM_GC_INTERVAL_MS = 30 * 1000;      // 每 30 秒扫描一次
 
 function allocateRoomCode() {
   for (let i = 0; i < 9999; i++) {
@@ -404,38 +409,48 @@ function allocateRoomCode() {
   return null;
 }
 
+function roomToPublic(room) {
+  return {
+    code: room.code,
+    hostName: room.hostName || '房主',
+    players: room.players || 1,
+    maxPlayers: 2,
+    status: room.status || 'waiting',
+    gameId: room.gameId || '',
+    gameName: room.gameName || '',
+  };
+}
+
 app.get('/api/rooms', (req, res) => {
+  // 只返回登录用户创建的公开房间；游客房不进入大厅列表（仍可通过房间号加入）
   const list = Object.values(rooms)
-    .filter((r) => !r.password && r.status === 'waiting')
+    .filter((r) => r.public && !r.password && r.status === 'waiting')
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, 50)
-    .map((r) => ({
-      code: r.code,
-      hostName: r.hostName || '房主',
-      players: r.players || 1,
-      maxPlayers: 2,
-      status: r.status || 'waiting',
-      gameId: r.gameId || '',
-      gameName: r.gameName || '',
-    }));
+    .map(roomToPublic);
   res.json(list);
 });
 
 app.post('/api/rooms', (req, res) => {
   const { peerId, hostName, gameId, gameName } = req.body || {};
   if (!peerId) return res.status(400).json({ error: '缺少 peerId' });
+  const hostUser = currentUser(req);
   const code = allocateRoomCode();
   if (!code) return res.status(503).json({ error: '房间号已用完' });
+  const now = Date.now();
   rooms[code] = {
     code, peerId, password: '',
     hostName: hostName || '',
+    hostUserId: hostUser ? hostUser.id : null,
+    public: !!hostUser,          // 登录用户房间才进入公开列表
     players: 1,
     status: 'waiting',
     gameId: gameId || '',
     gameName: gameName || '',
-    createdAt: Date.now(),
+    createdAt: now,
+    lastHeartbeat: now,
   };
-  res.json({ code, room: rooms[code] });
+  res.json({ code, room: roomToPublic(rooms[code]) });
 });
 
 app.get('/api/rooms/:code', (req, res) => {
@@ -457,11 +472,26 @@ app.post('/api/rooms/:code/join', (req, res) => {
 app.patch('/api/rooms/:code', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  const { password, gameId, gameName, status } = req.body || {};
+  const { password, gameId, gameName, status, players } = req.body || {};
   if (typeof password === 'string') room.password = password;
   if (typeof gameId === 'string') room.gameId = gameId;
   if (typeof gameName === 'string') room.gameName = gameName;
   if (typeof status === 'string' && ['waiting', 'playing'].includes(status)) room.status = status;
+  if (typeof players === 'number') room.players = Math.max(1, Math.min(2, players));
+  res.json({ ok: true });
+});
+
+// 房主心跳：保持房间存活
+app.post('/api/rooms/:code/heartbeat', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  room.lastHeartbeat = Date.now();
+  res.json({ ok: true });
+});
+
+app.post('/api/rooms/:code/close', (req, res) => {
+  // 页面关闭/刷新时的 beacon 清理接口（同 DELETE 语义，但兼容 sendBeacon POST）
+  delete rooms[req.params.code];
   res.json({ ok: true });
 });
 
@@ -470,7 +500,17 @@ app.delete('/api/rooms/:code', (req, res) => {
   res.json({ ok: true });
 });
 
-// 每小时清理 24 小时未活跃房间
+// 定期清理离线房间（房主心跳超时）
+setInterval(() => {
+  const now = Date.now();
+  for (const code in rooms) {
+    if (now - rooms[code].lastHeartbeat > ROOM_HEARTBEAT_MS) {
+      delete rooms[code];
+    }
+  }
+}, ROOM_GC_INTERVAL_MS);
+
+// 兜底：每小时再清理一次 24 小时未活跃房间
 setInterval(() => {
   const now = Date.now();
   for (const code in rooms) {
