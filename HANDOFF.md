@@ -304,6 +304,7 @@ export default {
 - [x] 管理后台：用户列表、全部记录、删除用户
 - [x] 响应式（手机 / 平板 / 桌面）+ 粉色萌系主题
 - [x] 房间残留治理：心跳 + 90s 自动清理 + `sendBeacon` 关房 + 游客不进公开列表
+- [x] **已上线**：Render Blueprint + Free Postgres 双驱动，`https://chenting.cc.cd`（2026-09-07，详见 §13）
 
 ---
 
@@ -343,8 +344,8 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 写失败不会崩，但会记进 `store.stats().lastError`，管理员用 `GET /api/admin/storage` 能看到。
 - ⚠️ 整数列在 Postgres 侧是 BIGINT(int8)，`pg` 默认按字符串返回（怕精度溢出）。驱动层注册了 `int8 -> Number` 解析，`server/store/schema.js` 的 `fromStored()` 又兜了一道，**两处都不要删**：否则 `user.score += 20` 会变成字符串拼接（`"1000" + 20` 得到 `100020`）。用外部工具直连库读数表时也要记得 `pg.types.setTypeParser(20, Number)`。
 
-**7. `git push` 不会自动更新线上**
-Render 配的是 Manual Deploy，推完代码还要去 Render 后台点一次部署。
+**7. 改完代码 push 就行，别再手动点部署**
+线上 Auto-Deploy = **On Commit**：推 `main` 即自动构建部署（30–40s），改 `render.yaml` 会触发一次 Blueprint sync。部署历史在后台 Deploys 页，失败一定要看 Logs 里的退出原因。
 
 **8. 数据 Dispose/清理要成对**
 `ctx.net.on()` 返回取消订阅函数，必须在 `destroy()` 里全部调用。房间心跳 `setInterval` 与临时轮询器同理（`showLobby` 里都要 `clearInterval`）。
@@ -355,6 +356,16 @@ Render 配的是 Manual Deploy，推完代码还要去 Render 后台点一次部
 - 人机模式不计分是**刻意防刷**，若后续要开放请同时设计防刷策略（如人机最高分段上限）。
 - `index.html` 里混杂了大量 `data-page-node-id="xxxx..."` 随机串（来自某个可视化页面编辑器），**是无意义的噪音**，可忽略；修改 HTML 结构时不建议依赖这些属性。
 
+
+**10. 换 Node 版本必须「Clear build cache & deploy」（2026-09-07 线上 exit-1 根因）**
+`better-sqlite3` 是原生模块，`.node` 二进制按 `NODE_MODULE_VERSION` 编译。改 `NODE_VERSION` 只重新部署**不会**重装缓存里的二进制：曾出现「按 Node 25（ABI 147）编译的 `better_sqlite3.node` 被 Node 22（需要 127）加载」→ `ERR_DLOPEN_FAILED` → 启动即 `Exited with status 1`，连续 3 次部署全栽这儿。
+- 正确姿势：后台「More → Clear build cache & deploy」。
+- 代码侧已加固：两个驱动都改成**按需 require**（`server/store/index.js`），只要设了 `DATABASE_URL` 就绝不加载 sqlite 二进制；`better-sqlite3` 也已移到 `optionalDependencies`，装不上不阻断构建。**这两处别回退。**
+
+**11. 连 Render Postgres 有两个隐性必设项**
+- 连接串里**不含** `sslmode`，而驱动默认 `disable` → 直连会被拒。必须同时设 `PGSSLMODE=require`（线上 env 与本地跑 `tools/migrate-storage.mjs` 时都一样）。
+- 内网/外网是两个不同 host：服务 env 用 Internal（`dpg-xxxx-a`），本地脚本必须用 DB 页面上的 **External** 串（`dpg-xxxx-a.oregon-postgres.render.com`）。
+- Free 库**到期即删无宽限期**（当前库 2026-10-07 过期），到期前用 `migrate-storage --from postgres --to sqlite` 反向拉一份回本地当备份。
 ---
 
 ## 12. 开发与验证工作流
@@ -402,34 +413,74 @@ node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to s
 
 ---
 
-## 13. 上线部署
+## 13. 上线部署（2026-09-07 已上线，实况记录）
 
-Render Blueprint 已配好（`render.yaml`：`rootDir: server`、`buildCommand: npm install`、`startCommand: npm start`）。
+### 13.1 拓扑
 
-```bash
-git add -A && git commit -m "..." && git push origin main
+```
+GitHub mysterious1014/couple-game (main)
+   └─ Render Blueprint  exs-dadbs6v10e5c73e86sug   ← 读本仓库 render.yaml，Auto Sync 开着
+        ├─ Web 服务  couple-game  srv-dadbu0ajnfac73fa5100   Free / Node / rootDir: server
+        │     访问地址  https://chenting.cc.cd        （主域）+ 一个 onrender.com 子域
+        └─ Postgres  couple-game-db  dpg-dafbdolbedkc738hrol0-a  PG 18 / Oregon / Free
+              ⚠️ 手工在后台建的，**不归 Blueprint 管**（Blueprint 收养不了已有资源，写进
+                 render.yaml 反而会让整次 sync 因重名创建失败），所以 render.yaml 里没有 databases: 段
 ```
 
-然后：**Render 后台 → 服务 couple-game → Manual Deploy**（这一步不能省）。
+代码推送即自动部署（Auto-Deploy = On Commit）。一次部署约 30–40s。
 
-### 13.1 想让用户数据真的不丢：接 Postgres（推荐）
-1. 建一个 Postgres：Render 后台 New → Postgres，或 Neon 免费档。
-2. 在 Render 服务环境变量里加 `DATABASE_URL = postgres://user:pw@host:5432/db`（本地/自建库需要 TLS 时再加 `PGSSLMODE=require`）。
-3. 把本地攒下的账号搬上去：`node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL" --apply`。
-4. 部署后访问 `https://<host>/api/health`，确认返回 `"driver":"postgres"`；管理员再看 `GET /api/admin/storage` 核对行数。
-之后重新部署不会再清数据（数据在数据库服务里，不在实例磁盘上）。
+### 13.2 环境变量（改这些都在后台 Environment 页，不要提交进仓库）
 
-### 13.2 注意事项
-- Free 计划冷启动较慢，首次访问可能要等几十秒。
-- 部署后 `server/data/couple-game.sqlite` 会被重置（Free 计划磁盘临时，见 §11 坑 2）。要跨部署保留数据，先挂 Persistent Disk 并设 `DATA_DIR`。
-- 线上核对内容时，`curl https://<host>` 可能返回 `426 Upgrade Required`（对根路径），建议改 curl 具体静态资源或接口来判断版本。
+| 变量 | 值 | 说明 |
+| --- | --- | --- |
+| `NODE_VERSION` | `22` | 原生模块 ABI 绑主版本；**改它必须走「More → Clear build cache & deploy」**，见 §11 坑 10 |
+| `DATABASE_URL` | 内网连接串（Secret） | 有值即用 Postgres 驱动，没值退回 SQLite |
+| `PGSSLMODE` | `require` | 连接串里不含 `sslmode`，代码默认 `disable`，不设这一项连 Render 内网库会被拒 |
+| `PORT` | Render 自动注入 | `server/index.js` 已读取 |
+
+本地另有 `DATA_DIR` / `DATABASE_FILE`（库文件位置）只在 SQLite 分支生效。
+
+### 13.3 部署后验收（三条命令，别开浏览器）
+
+```bash
+# ① 驱动与结构版本
+curl https://chenting.cc.cd/api/health
+#    {"ok":true,"driver":"postgres","schemaVersion":3}
+
+# ② 登录拿 sid（HttpOnly cookie，必须用 cookie jar）
+curl -c ck.txt -H 'Content-Type: application/json' \
+     -d '{"username":"<管理员>","password":"<密码>"}' https://chenting.cc.cd/api/login
+
+# ③ 存储实况（字段是 records，不是 game_records；users/records/sessions 是各表行数）
+curl -b ck.txt https://chenting.cc.cd/api/admin/storage
+```
+
+### 13.4 数据搬迁与回拉
+
+- 本地 → 线上：`node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "<外部连接串>" --apply`
+  （外部连接串在 DB 页面右侧，和 `PGSSLMODE=require` 配对使用；目标库非空时再加 `--force`。
+  2026-09-07 实测：`users=2 records=2 sessions=4`，回读校验一致。）
+- 线上 → 本地（当备份用）：`--from postgres --to sqlite` 反向跑一遍即可，工具两个方向都支持。
+- 服务重启（Restart，不重新部署）不会丢数据：数据在 PG 里，不在实例磁盘上。
+
+### 13.5 Free 计划的限制（都会以「网站变慢/打不开」的形式被用户体验到）
+
+1. 闲置即休眠，冷启动 **50 秒上下**；想常驻要升 Starter（约 $7/月）。
+2. Free Postgres **2026-10-07 到期即删，无宽限期**：到期前必须升级或 `migrate-storage` 反向导出。
+3. 实例磁盘是临时的，所以线上只能靠 PG 持久化（SQLite 分支在线上等于每次部署清空）。
+4. 单实例：`rooms` / `onlineUsers` 仍是进程内存态，P2P 房间不受影响，但横向扩容前必须先解决（见 §14-1）。
+5. 数据库密码等凭据：轮换入口在 DB 页「New default credential」，换完记得同步 `DATABASE_URL` 并重启服务。
+
+### 13.6 已排除的假故障
+
+- `https://couple-game.onrender.com` 返回 `426 Upgrade Required`：**不是我们的服务**。未占用的 onrender 子域返回 404，被 Blueprint 关掉的子域也返回 404，说明这个名字被别人的服务占了；我们服务的子域名在后台 Overview 的「Show more URLs」里。
+- 2026-09-07 21:44 之前那几次 `Exited with status 1` 全部是同一个原因（原生模块 ABI 不匹配，§11 坑 10），不是欠费、不是 426、不是冷启动。
 
 ---
-
 ## 14. 后续优化建议（Roadmap）
 
 **稳定性（建议优先）**
-1. ~~数据持久化~~ **已做（2026-09-07）**：`server/store/` 双驱动（SQLite 默认 / Postgres 设 `DATABASE_URL` 即启用）+ 结构版本迁移 + `tools/migrate-storage.mjs` 搬迁 + 33 项回归断言（SQLite 33 项全绿；Postgres 分支 25 项已用本地真实 PostgreSQL 18.4 跑通）。剩余：① 线上还差一个真的 Postgres 实例（按 §13.1 四步接上）；② 多实例下的房间/在线状态共享（仍是单进程内存）。
+1. ~~数据持久化~~ **已做（2026-09-07）**：`server/store/` 双驱动（SQLite 默认 / Postgres 设 `DATABASE_URL` 即启用）+ 结构版本迁移 + `tools/migrate-storage.mjs` 搬迁 + 33 项回归断言（SQLite 33 项全绿；Postgres 分支 25 项已用本地真实 PostgreSQL 18.4 跑通）。线上 Postgres 已接好并完成数据搬迁（2026-09-07，§13）。剩余：多实例下的房间/在线状态共享（仍是单进程内存，Free 只有单实例所以暂不致命）。
 2. **看门狗/重连**：P2P 断线后的自动重连与状态恢复（当前断开只能重开房间）。
 3. **后端接收胜负上报做校验**：现在比分由前端上报 `/api/play`，存在作弊可能；若要更严谨，应改为由服务端（房主侧）权威结算。
 

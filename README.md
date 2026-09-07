@@ -38,6 +38,8 @@ node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑
 
 本项目根目录已包含 `render.yaml`，支持 Render Blueprint 一键部署。
 
+> **当前状态（2026-09-07）**：已按下面步骤部署完成，线上地址 `https://chenting.cc.cd`，存储驱动为 Postgres。线上实况、环境变量清单与踩坑记录见 `HANDOFF.md` §13。
+
 ### 1. 推代码到 GitHub
 
 确保当前仓库已推送到你的 GitHub 仓库（如 `mysterious1014/couple-game`）。
@@ -82,7 +84,7 @@ node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑
   ```
 
   另一条路是升级实例并挂载 **Persistent Disk**，再把 `render.yaml` 里的 `DATA_DIR` 注释打开指向挂载点。
-- **环境变量**：`PORT`（服务端口）、`DATABASE_URL`（设了就用 Postgres）、`PGSSLMODE`（`disable`/`require`/`no-verify`，默认按连接串里的 `sslmode` 推断）、`DATA_DIR` / `DATABASE_FILE`（改 SQLite 位置）。
+- **环境变量**：`PORT`（服务端口）、`DATABASE_URL`（设了就用 Postgres）、`PGSSLMODE`（`disable`/`require`/`no-verify`，默认按连接串里的 `sslmode` 推断 —— ⚠️ Render 给的连接串不含 `sslmode`，所以 `DATABASE_URL` 必须与 `PGSSLMODE=require` 成对设置，否则连不上）、`DATA_DIR` / `DATABASE_FILE`（改 SQLite 位置）。
 - **管理员密码**：默认密码是 `888888`，建议部署后通过后台管理页面尽快修改，或限制管理员账号的使用。
 - **HTTPS**：Render 默认提供 HTTPS，无需额外配置。
 

@@ -1,26 +1,71 @@
 # Render 部署配置（Blueprint）
-# 在 Render 后台「New」→「Blueprint」选择本仓库即可自动按此配置部署。
+#
+# 线上现状（2026-09-07 实测，服务 srv-dadbu0ajnfac73fa5100）：
+#   仓库 https://github.com/mysterious1014/couple-game  →  本 Blueprint(exs-dadbs6v10e5c73e86sug)
+#   → Web 服务 couple-game（Free / Node / Auto-Deploy: On Commit）→ https://chenting.cc.cd
+#   数据在手工建的 Postgres couple-game-db 里，连接串以 Secret 形式存在服务的 Env Variables：
+#     DATABASE_URL = postgresql://couple_game_db_user:***@dpg-dafbdolbedkc738hrol0-a/couple_game_db  (内网)
+#     PGSSLMODE    = require   ← 连接串里没有 sslmode，代码默认 disable，不加会被拒
+#   改这两项请在后台 Environment 页操作，别把连接串写进本文件（会连密码一起进 Git）。
+
 services:
   - type: web
     name: couple-game
-    rootDir: server          # 构建/启动在 server 目录下进行
+    rootDir: server          # 构建/启动都在 server 目录下进行
     runtime: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      # better-sqlite3@12 需要 Node 20.x / 22.x+，这里锁死主版本，避免默认版本漂移导致原生模块装不上
+      # ⚠️ 血泪坑（本轮线上 exit-1 的真正根因）：改 NODE_VERSION 后必须走
+      #   「More → Clear build cache & deploy」，不能只改版本号重新部署。
+      #   缓存里残留的 better_sqlite3.node 是按旧 Node ABI 编译的（NODE_MODULE_VERSION 147），
+      #   换到 Node 22（需要 127）后 require 直接 ERR_DLOPEN_FAILED → 启动即退出。
+      # 原生模块 ABI 跟 Node 主版本绑定，这里锁死，避免默认版本漂移。
       - key: NODE_VERSION
         value: "22"
-      # ⚠️ Free 计划的磁盘是临时的：每次部署/重启都会清空 server/data/，SQLite 文件也一样丢。
-      # 推荐：New → Postgres 建一个数据库，把连接串放到下面这个变量里，
-      # 存储层会自动切到 Postgres 驱动（见 server/store/），数据就不再依赖实例磁盘。
-      # 老数据用 node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL" --apply 搬上去。
-      # - key: DATABASE_URL
-      #   value: postgres://user:password@host:5432/dbname
-      #
-      # 或者：升级 Starter 及以上并挂载 Persistent Disk，再打开下面这行指向挂载点。
+      # 存储驱动开关：有 DATABASE_URL 走 Postgres，没有就退回 SQLite（server/store/index.js）。
+      # 两个驱动都是按需 require，所以设了 DATABASE_URL 就绝不碰 sqlite 原生二进制。
+      - key: PGSSLMODE
+        value: require
+      # 走 SQLite 时才用得上：Free 计划磁盘是临时的，每次部署/重启都会清空 server/data/。
+      # 想留在 SQLite 就得升 Starter+ 并挂 Persistent Disk，把 DATA_DIR 指到挂载点。
       # - key: DATA_DIR
       #   value: /var/data/couple-game
-    # Render 会自动注入 PORT 环境变量，server/index.js 已读取 process.env.PORT
-    # 健康检查：Render 默认探测 Web 服务端口，无需额外配置
+    # Render 自动注入 PORT，server/index.js 已读取 process.env.PORT。
+    #
+    # 刻意不写的三项，别再「顺手补上」：
+    # 1) databases: 段 —— 线上库是后台手工建的，Blueprint 收养不了。写进本文件会让 sync
+    #    去新建同名库而整次同步失败（Free 也只允许一个 PG）。要真想改成 Blueprint 托管：
+    #    先导出备份 → 删掉手工库 → 打开下面注释块 → sync → 重新迁移。
+    # 2) domains: —— 后台加的 chenting.cc.cd 属于「Blueprint 未声明」的配置，官方明确
+    #    只有与本文件冲突的配置项才会在 sync 时被覆盖（且 sync 永不删除资源），所以留着不写最稳。
+    #    一旦写进来，Render 还会按根域自动追加 www.chenting.cc.cd，多一条要配 DNS 的域名。
+    #    相关：renderSubdomainPolicy: disabled 可以让服务只经自定义域名访问（onrender 子域会返 404）。
+    #    注意 couple-game.onrender.com 返回 426 —— 未占用的子域返回 404，那个名字是别人的服务，不是我们被限制。
+    # 3) healthCheckPath: —— 当前 /api/health 不查库（永不失败），挂上健康检查等于把
+    #    「探活失败 → Render 对所有访客返回 502」这条链路接进生产。以后若让 /api/health 等库就绪，
+    #    要清楚这个副作用再开。
+    # domains:
+    #   - chenting.cc.cd
+    # databases:
+    #   - type: postgres
+    #     name: couple-game-db
+    #     plan: free
+    #     postgresMajorVersion: "18"
+    #     region: oregon
+    #   # 然后服务的 env 用：
+    #   # - key: DATABASE_URL
+    #   #   fromDatabase: { name: couple-game-db, property: connectionString }
+
+# ── 上线 / 搬迁速查（细节见 HANDOFF.md §13、docs/couple-game/2026-09-07-接手记录.md §9）──
+#   1) 本地搬数据（外部连接串在 DB 页面，务必先 $env:PGSSLMODE='require'）：
+#      node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "<外部连接串>" --apply
+#      目标库若已有服务自建的 admin，dry-run 会拒绝，需要再加 --force（本地 SQLite 才是权威数据）。
+#   2) 探活：curl https://chenting.cc.cd/api/health
+#      期望 {"ok":true,"driver":"postgres","schemaVersion":3}
+#   3) 管理员登录后看 /api/admin/storage 核对 users / records 行数（key 是 records，不是 game_records）。
+#
+# ⚠️ Free Postgres 到期即删、没有宽限期：couple-game-db 于 2026-10-07 过期。
+#    到期前二选一：升级为付费库，或导出 SQL 迁到别的 Postgres。
+# ⚠️ Free 实例会因闲置休眠，冷启动 50s 上下，第一次访问慢是正常的。
