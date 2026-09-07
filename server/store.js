@@ -152,9 +152,18 @@ function fromStored(col, value) {
 
 function toRow(table, item) {
   const row = { extra: null };
-  for (const col of table.columns) row[col.name] = toStored(col, item ? item[col.name] : null);
   const colNames = new Set(table.columns.map((c) => c.name));
   const extra = {};
+  for (const col of table.columns) {
+    const value = item ? item[col.name] : null;
+    if (value !== null && typeof value === 'object') {
+      // 已知列上出现了对象/数组：塞进 extra，读回时覆盖回来，绝不静默丢数据
+      extra[col.name] = value;
+      row[col.name] = null;
+    } else {
+      row[col.name] = toStored(col, value);
+    }
+  }
   for (const key of Object.keys(item || {})) {
     if (!colNames.has(key)) extra[key] = item[key];
   }
@@ -244,7 +253,8 @@ function checkSchemaVersion() {
 // 一次性把旧版 server/data/db.json 导入 SQLite（只导入空的集合，不覆盖已有数据）
 function migrateFromLegacyJson() {
   if (getMeta('json_imported_at')) return;
-  if (!fs.existsSync(legacyJsonFile)) { setMeta('json_imported_at', 'skipped:no-file'); return; }
+  // 文件不存在时不写导入标记：以后手工放回一份 db.json 仍会被导入
+  if (!fs.existsSync(legacyJsonFile)) return;
 
   let parsed;
   try {

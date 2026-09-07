@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const serverDir = path.join(repoRoot, 'server');
@@ -160,6 +160,46 @@ failures += check('旧 db.json 未被重复导入（无第二个 imported 文件
 });
 
 await stopServer();
+
+const HELPER_SRC = `// 直接 require server/store.js，验证「未登记字段」和「已知列里放对象」都不会丢
+const path = require('path');
+const mode = process.argv[2];
+const { data, save } = require(path.join(process.argv[3], 'store.js'));
+if (mode === 'write') {
+  data.users.push({
+    id: 'fidelity1', username: 'fidelity_one', nickname: '保真用户', password: 'x:y', role: 'user',
+    score: 7, createdAt: 1, lastLogin: null, cpPartnerId: null, cpSince: null, cpCode: '',
+    tags: ['a', { deep: true }],
+    metadata: { nested: { ok: 1 } },
+  });
+  data.messages.push({ id: 'mf1', fromId: 'fidelity1', toId: 'admin', type: 'chat', text: { weird: 'object' }, ts: 2, read: false });
+  save();
+  console.log('written');
+} else {
+  const u = data.users.find((x) => x.id === 'fidelity1') || null;
+  const m = data.messages.find((x) => x.id === 'mf1') || null;
+  console.log(JSON.stringify({ user: u, msgText: m ? m.text : null }));
+}`;
+console.log('== 4. store.js 字段保真（未登记字段 / 已知列放对象值）==');
+const helper = path.join(tmp, 'store-fidelity.cjs');
+fs.writeFileSync(helper, HELPER_SRC);
+function runHelper(mode) {
+  return spawnSync(process.execPath, [helper, mode, serverDir], {
+    cwd: serverDir,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { DATA_DIR: dataDir }),
+  });
+}
+const w = runHelper('write');
+failures += check('store.js 写入保真数据成功', () => assert.ok(w.status === 0 && w.stdout.includes('written'), 'exit=' + w.status + ' out=' + w.stdout + ' err=' + w.stderr));
+const r = runHelper('read');
+const back = JSON.parse(r.stdout.trim().split('\n').pop());
+failures += check('未登记的数组字段（tags）原样读回', () => assert.deepStrictEqual(back.user.tags, ['a', { deep: true }]));
+failures += check('未登记的嵌套对象（metadata）原样读回', () => assert.deepStrictEqual(back.user.metadata, { nested: { ok: 1 } }));
+failures += check('已知列（messages.text）放对象也不丢，走 extra 往返', () => assert.deepStrictEqual(back.msgText, { weird: 'object' }));
+failures += check('数值列仍是数值、文本未被字符串化污染', () => { assert.strictEqual(back.user.score, 7); assert.strictEqual(back.user.username, 'fidelity_one'); });
+failures += check('中文字段往返无损', () => assert.strictEqual(back.user.nickname, '保真用户'));
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? '\n== 全部通过 ==' : `\n== 失败 ${failures} 项 ==\n服务日志:\n` + logs.join('\n'));
 process.exit(failures === 0 ? 0 : 1);
