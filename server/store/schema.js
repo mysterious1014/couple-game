@@ -118,7 +118,16 @@ function toStored(col, value) {
 
 function fromStored(col, value) {
   if (col.bool) return !!value;
-  return value === undefined ? null : value;
+  if (value === undefined || value === null) return null;
+  // Postgres 的整数列是 BIGINT(int8)，pg 驱动默认按字符串返回（怕精度溢出）。
+  // 驱动层注册了 int8 -> Number 的 parser，这里再兜一道：绝不让 "1000" 混进内存，
+  // 否则 index.js 里 score += 20 会变成字符串拼接。
+  if (col.type === T.INT) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return value;
 }
 
 // list 集合：内存对象 -> 数据库行

@@ -341,6 +341,7 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 测试脚本里杀进程前先 `await` 一个 400ms 的 settle（`tools/test-server-persistence.mjs` 的 `stopServer()` 已内置）。
 - 进程收到 SIGINT/SIGTERM 会先 `flush()` 再退出（Render 停止实例时用的就是 SIGTERM）。
 - 写失败不会崩，但会记进 `store.stats().lastError`，管理员用 `GET /api/admin/storage` 能看到。
+- ⚠️ 整数列在 Postgres 侧是 BIGINT(int8)，`pg` 默认按字符串返回（怕精度溢出）。驱动层注册了 `int8 -> Number` 解析，`server/store/schema.js` 的 `fromStored()` 又兜了一道，**两处都不要删**：否则 `user.score += 20` 会变成字符串拼接（`"1000" + 20` 得到 `100020`）。用外部工具直连库读数表时也要记得 `pg.types.setTypeParser(20, Number)`。
 
 **7. `git push` 不会自动更新线上**
 Render 配的是 Manual Deploy，推完代码还要去 Render 后台点一次部署。
@@ -350,6 +351,7 @@ Render 配的是 Manual Deploy，推完代码还要去 Render 后台点一次部
 
 **9. 其它**
 - 在线状态为内存态，重启后用户重新登录/心跳即恢复；好友关系存在 SQLite `friendships` 表里，是持久的。
+- ⚠️ **SQLite 跑在 WAL 模式**：主库文件 `server/data/couple-game.sqlite` 可能只有 4KB，真正的数据在同目录的 `couple-game.sqlite-wal`（本机实测 535KB）。手工备份/复制必须连 `-wal`、`-shm` 一起拷，或先 `PRAGMA wal_checkpoint(TRUNCATE)` 折回主文件，只拷主文件会得到一个空库。`tools/migrate-storage.mjs` 是直接打开原目录里的库，不受这个坑影响。
 - 人机模式不计分是**刻意防刷**，若后续要开放请同时设计防刷策略（如人机最高分段上限）。
 - `index.html` 里混杂了大量 `data-page-node-id="xxxx..."` 随机串（来自某个可视化页面编辑器），**是无意义的噪音**，可忽略；修改 HTML 结构时不建议依赖这些属性。
 
@@ -380,6 +382,8 @@ node tools/test-server-persistence.mjs 4310 --url postgres://user:pw@host:5432/c
 # 5) 本地 <-> 线上数据搬迁（默认 dry-run，加 --apply 才写；目标非空还要 --force）
 node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL"
 node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to sqlite --apply
+# dry-run 也不是完全只读：它会在目标库建表（CREATE TABLE IF NOT EXISTS，幂等）并写一行 meta.schema_version，
+# 但六张业务表一行都不写；meta 不会被搬走（json_imported_at 是源库自己的导入标记），目标库自己初始化自己的 meta。
 ```
 
 > ⚠️ **不要直接对前端文件用 `node --check`**：`js/` 是 ES Modules 且仓库根目录没有 `package.json`，Node 会按 CommonJS 解析，17 个前端文件会全部误报 `Cannot use import statement outside a module`。`tools/check-syntax.mjs` 的做法是把前端 `.js` 复制为临时 `.mjs` 再检查，检查完自动清理。
@@ -425,7 +429,7 @@ git add -A && git commit -m "..." && git push origin main
 ## 14. 后续优化建议（Roadmap）
 
 **稳定性（建议优先）**
-1. ~~数据持久化~~ **已做（2026-09-07）**：`server/store/` 双驱动（SQLite 默认 / Postgres 设 `DATABASE_URL` 即启用）+ 结构版本迁移 + `tools/migrate-storage.mjs` 搬迁 + 32 项回归断言（Postgres 分支已用真实 PG 18 跑通）。剩余：① 线上还差一个真的 Postgres 实例（按 §13.1 四步接上）；② 多实例下的房间/在线状态共享（仍是单进程内存）。
+1. ~~数据持久化~~ **已做（2026-09-07）**：`server/store/` 双驱动（SQLite 默认 / Postgres 设 `DATABASE_URL` 即启用）+ 结构版本迁移 + `tools/migrate-storage.mjs` 搬迁 + 33 项回归断言（SQLite 33 项全绿；Postgres 分支 25 项已用本地真实 PostgreSQL 18.4 跑通）。剩余：① 线上还差一个真的 Postgres 实例（按 §13.1 四步接上）；② 多实例下的房间/在线状态共享（仍是单进程内存）。
 2. **看门狗/重连**：P2P 断线后的自动重连与状态恢复（当前断开只能重开房间）。
 3. **后端接收胜负上报做校验**：现在比分由前端上报 `/api/play`，存在作弊可能；若要更严谨，应改为由服务端（房主侧）权威结算。
 
@@ -436,7 +440,7 @@ git add -A && git commit -m "..." && git push origin main
 7. 消息实时化：现在私聊是轮询，可升级 WebSocket（`ws` 依赖已在 node_modules 里）或 SSE。
 
 **工程质量**
-8. ~~补自动化测试~~ 已做一半：`tools/check-syntax.mjs`、`tools/test-ai-gomoku.mjs`、`tools/test-server-persistence.mjs`（2026-09-07，SQLite 32 项 / Postgres 24 项断言）。待补：其余 7 个游戏的对局终局测试、胜负纯函数的正反例断言。
+8. ~~补自动化测试~~ 已做一半：`tools/check-syntax.mjs`、`tools/test-ai-gomoku.mjs`、`tools/test-server-persistence.mjs`（2026-09-07，SQLite 33 项 / Postgres 25 项断言）。待补：其余 7 个游戏的对局终局测试、胜负纯函数的正反例断言。
 9. 拆分 `js/app.js`（32KB）与 `server/index.js`（24KB）——单文件已偏大，但拆分时务必保持 §11 坑 1/4 的约定。
 10. 清理 `index.html` 里的 `data-page-node-id` 噪音。
 11. 前端错误上报 / `try-catch` 兜底，避免一处报错导致整站白屏。

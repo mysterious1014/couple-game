@@ -239,6 +239,16 @@ failures += check('已知列（messages.text）放对象也不丢，走 extra �
 failures += check('数值列仍是数值、文本未被字符串化污染', () => { assert.strictEqual(back.user.score, 7); assert.strictEqual(back.user.username, 'fidelity_one'); });
 failures += check('中文字段往返无损', () => assert.strictEqual(back.user.nickname, '保真用户'));
 
+const { createRequire: createRequireForUnit } = await import('node:module');
+const requireSchema = createRequireForUnit(path.join(serverDir, 'noop.js'));
+const { fromStored, T: Tcol } = requireSchema('./store/schema');
+failures += check('整数列被驱动返回成字符串时仍转回 number（防 score 变字符串拼接）', () => {
+  assert.strictEqual(fromStored({ type: Tcol.INT }, '7'), 7);
+  assert.strictEqual(fromStored({ type: Tcol.INT }, 7), 7);
+  assert.strictEqual(fromStored({ type: Tcol.INT }, null), null);
+  assert.strictEqual(fromStored({ bool: true }, 0), false);
+  assert.strictEqual(fromStored({ bool: true }, 1), true);
+});
 console.log('== 5. 旧库结构自动升级（v1 缺 seq / extra 列 -> v3）==');
 if (pgUrl) {
   console.log('  SKIP 这条只针对 SQLite 老库（Postgres 模式跳过）');
