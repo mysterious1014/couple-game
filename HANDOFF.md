@@ -373,6 +373,9 @@ curl -s http://localhost:3000/js/games/registry.js | grep -c "from './"   # 应�
 # 4) 服务端持久化回归测试（真起一个隔离端口的服务，写数据 -> 重启 -> 读回）
 node tools/test-server-persistence.mjs 4310     # 默认测 SQLite，用临时 DATA_DIR，不碰真实数据
 node tools/test-server-persistence.mjs 4310 --url postgres://user:pw@host:5432/cgtest_test   # 同一套断言测 Postgres 驱动
+# 不想建云端库也想验证 Postgres 分支：本地拉起一个真 PostgreSQL 跑同一套断言
+#   cd server && npm i --no-save embedded-postgres && cd .. && node tools/dev-postgres.mjs
+# （跑完自动停服并删除临时数据目录；用完 cd server && npm prune 清掉临时依赖）
 
 # 5) 本地 <-> 线上数据搬迁（默认 dry-run，加 --apply 才写；目标非空还要 --force）
 node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL"

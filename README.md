@@ -24,6 +24,7 @@ npm start
 node tools/check-syntax.mjs              # 全站语法检查
 node tools/test-ai-gomoku.mjs            # 五子棋 AI 三档难度跑完整对局
 node tools/test-server-persistence.mjs   # 存储层回归：写数据 -> 重启进程 -> 读回
+node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑同一套回归（需先 npm i --no-save embedded-postgres）
 ```
 
 打开浏览器访问 `http://localhost:3000`：
