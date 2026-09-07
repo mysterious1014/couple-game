@@ -5,12 +5,16 @@
   "main": "index.js",
   "type": "commonjs",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test:persistence": "node ../tools/test-server-persistence.mjs",
+    "test:ai": "node ../tools/test-ai-gomoku.mjs",
+    "lint:syntax": "node ../tools/check-syntax.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "express": "^4.19.2",
     "peer": "^1.0.2"
   }

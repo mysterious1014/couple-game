@@ -59,7 +59,7 @@ npm start
 
 ### 4. 注意事项
 
-- **数据持久化**：Render Free 计划实例每次重启/重新部署时，本地 `server/data/db.json` 会被清空。系统会自动重新创建默认管理员账号 `admin/888888`。如果你希望账号和记录永久保存，请在 Render 服务设置里挂载 **Persistent Disk**，或改用外部数据库（如 MongoDB Atlas / PostgreSQL）。
+- **数据持久化**：账号/战绩/好友/私信已存进 SQLite（单文件，进程重启不再丢失）。但 **Render Free 计划的磁盘是临时的**，每次部署或重启仍会清空 `server/data/`，届时会自动重建默认管理员 `admin/888888`。要永久保存：升级实例并挂载 **Persistent Disk**，然后在 `render.yaml` 打开 `DATA_DIR` 指向挂载点；或改用外部数据库（PostgreSQL / MongoDB Atlas）。
 - **管理员密码**：默认密码是 `888888`，建议部署后通过后台管理页面尽快修改，或限制管理员账号的使用。
 - **HTTPS**：Render 默认提供 HTTPS，无需额外配置。
 
@@ -68,7 +68,7 @@ npm start
 - 前端：原生 HTML / CSS / JavaScript（ES Modules）
 - 实时同步：PeerJS（WebRTC 点对点）
 - 后端：Node.js + Express
-- 存储：JSON 文件（`server/data/db.json`）
+- 存储：SQLite（`better-sqlite3`，默认 `server/data/couple-game.sqlite`，可用 `DATA_DIR` / `DATABASE_FILE` 改位置）
 - 部署：Render Blueprint
 
 ## 项目结构
@@ -89,7 +89,7 @@ couple-game/
 │       └── draw.js         # 你画我猜
 ├── server/
 │   ├── index.js            # Express 服务
-│   ├── store.js            # JSON 数据存储
+│   ├── store.js            # SQLite 数据存储（对外仍是 { data, save } 接口）
 │   └── package.json        # 后端依赖
 └── render.yaml             # Render 部署配置
 ```

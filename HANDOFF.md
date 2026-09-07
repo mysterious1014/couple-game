@@ -14,7 +14,7 @@
 - **社交**：好友系统（请求 / 备注 / 分组 / 拉黑）、好友私聊、房间邀请、情侣（CP）绑定
 - **成长**：账号、积分、段位、成就徽章、战绩明细、情侣积分排行榜
 
-设计目标是**轻量**：无前端构建步骤（原生 ES Modules），后端单进程 Express + JSON 文件存储，整体源码约 350KB。
+设计目标是**轻量**：无前端构建步骤（原生 ES Modules），后端单进程 Express + SQLite 存储，整体源码约 350KB。
 
 ---
 
@@ -35,7 +35,8 @@ npm start            # 等价于 node index.js
 - **默认管理员**：`admin` / `888888`（积分固定 99999，不参与排名）
 - 端口：默认 `3000`，生产环境读 `process.env.PORT`
 - PeerJS 信令服务器挂载在同进程的 `/peerjs` 路径（**不要改成公共 PeerJS 云**，国内网络连不通，见 §11 坑 3）
-- 首次启动会自动创建 `server/data/db.json` 并种入管理员账号
+- 首次启动会自动创建 SQLite 库 `server/data/couple-game.sqlite` 并种入管理员账号
+- 若同目录还留有旧版 `db.json`，会一次性导入并改名为 `db.imported-<时间戳>.json`（只填空集合，不覆盖已有数据）
 
 单机体验双人对战：开两个浏览器标签页，一个「创建房间」，另一个输入 4 位房间号「加入」。
 单机体验人机：大厅点「和电脑玩」→ 选难度 → 选游戏。
@@ -49,7 +50,7 @@ npm start            # 等价于 node index.js
 | 前端 | 原生 HTML / CSS / JS（**ES Modules**） | 无构建、无框架、无打包。改完刷新即生效 |
 | 通信 | PeerJS（WebRTC 点对点） | 服务端同时运行自建 PeerJS 信令服务 |
 | 后端 | Node.js（≥18）+ Express 4 | 单文件 `server/index.js`，同时托管静态资源与 `/api` |
-| 存储 | JSON 文件 `server/data/db.json` | 原子写（临时文件 + rename） |
+| 存储 | SQLite `server/data/couple-game.sqlite`（better-sqlite3@12） | WAL + 单事务整表重写；`store.js` 仍暴露 `{ data, save }` |
 | 部署 | Render（Blueprint，`render.yaml`） | Free 计划，Manual Deploy |
 
 **依赖只有两个**（`server/package.json`）：
@@ -93,9 +94,9 @@ couple-game/
 │
 └── server/
     ├── index.js            # ★ 后端全部接口（32 个路由）与房间内存表
-    ├── store.js            # JSON 文件读写（原子写）
+    ├── store.js            # SQLite 读写 + 旧 db.json 导入（对外仍是 { data, save }）
     ├── package.json
-    └── data/db.json        # 运行时数据（被 gitignore，不含在交接包中）
+    └── data/couple-game.sqlite   # 运行时数据（被 gitignore；位置可用 DATA_DIR / DATABASE_FILE 覆盖）
 ```
 
 ### 页面结构（`index.html`）
@@ -222,9 +223,9 @@ export default {
 
 ---
 
-## 7. 数据模型（`server/data/db.json`）
+## 7. 数据模型（SQLite：`server/data/couple-game.sqlite`）
 
-顶层集合：`users`、`sessions`、`records`、`friendships`、`blocks`、`messages`（默认值见 `server/store.js`）。
+内存对象仍是 `users` / `sessions` / `records` / `friendships` / `blocks` / `messages`；落库时对应表 `users` / `sessions` / `game_records` / `friendships` / `blocks` / `messages`，另有 `meta(key,value)` 存 schema 版本与旧数据导入标记。映射表见 `server/store.js` 顶部的 `TABLES`。
 
 - **users**：`id, username, nickname, password(scrypt), role, createdAt, lastLogin, score, cpPartnerId, cpSince, cpCode`
 - **sessions**：`{ sessionToken: userId }`
@@ -233,9 +234,9 @@ export default {
 - **blocks**：`{ id, blockerId, blockedId, createdAt }`
 - **messages**：`{ id, fromId, toId, type:'chat'|'invite', text, roomCode, gameName, ts, read }`
 
-> ⚠️ **服务端侧的数据表变更要同步更新** `store.js` 的默认对象，否则首次启动（无 db.json 时）会缺字段报错。
+> ⚠️ **新增集合**要在 `server/store.js` 的 `emptyData()` 和 `TABLES` 里同时登记；**新增字段**在对应表的 `columns` 里加一列（没登记的字段会落进该行的 `extra` JSON 列，不丢但不可查询）。
 
-> 📌 **本地现状（2026-09-07 接手）**：`server/data/db.json` 已从 WorkBuddy 原工作目录一并迁移过来（1437 字节：2 个账号 / 1 个会话 / 2 条战绩 / 键结构与 `store.js` 默认值完全兼容），所以本机**不会**触发"重建并种入 admin/888888"。要回到干净状态，直接删掉该文件再启动即可。此文件含真实密码哈希，不要提交进 git。
+> 📌 **本地现状（2026-09-07）**：已从 WorkBuddy 迁来的 `db.json`（2 账号 / 1 会话 / 2 战绩）已一次性导入 SQLite，原文件保留为 `server/data/db.imported-1788781159626.json`。要回到干净状态：删掉 `server/data/` 里的 sqlite 与导入备份再启动，会重建 `admin/888888`。这些文件含真实密码哈希，`server/data/` 已在 `.gitignore` 内，不要提交。
 
 ---
 
@@ -301,8 +302,9 @@ export default {
 历史踩坑对象：`.modal`（登录弹窗常驻显示）、`#room`（返回大厅后残留）、`.chat-panel`、`.cp-banner`（未登录时空横条）。
 **新增任何可被 `hidden` 控制的容器时，一律用 `:not([hidden])` 写法。**
 
-**2. 数据是文件存储 + 部分内存态，重启会丢**
-Free 版 Render 每次重启/重新部署会清空本地磁盘，`server/data/db.json`（账号、记录、好友）会重置；在线状态 `onlineUsers`、房间 `rooms` 本来就是纯内存。**生产使用必须挂载 Persistent Disk 或换外部数据库**（SQLite / Postgres / MongoDB），这是目前最大的技术债。
+**2. 存储已换 SQLite（2026-09-07），但 Render Free 的磁盘仍是临时的**
+账号/会话/战绩/好友/私信现在存在 `server/data/couple-game.sqlite`：本地和自托管环境下进程重启不再丢数据，也不会再出现「JSON 写一半损坏」。房间 `rooms` 与在线状态 `onlineUsers` 仍是纯内存（P2P 连接断开后房间本就无意义，属合理设计）。
+⚠️ 未解决：Free 版 Render 每次重启/重新部署会清空磁盘，SQLite 文件同样丢。要么升级实例并挂载 **Persistent Disk** + 设 `DATA_DIR`（`render.yaml` 里已留注释），要么换外部数据库（Postgres / MongoDB）。
 
 **3. 不要改用公共 PeerJS 云信令**
 早期用 `0.peerjs.com`，国内网络下 `peer.on('open')` 长期不触发，表现为「创建房间一直卡住」。现已改为服务端自建信令（`ExpressPeerServer`）。
@@ -321,7 +323,7 @@ Render 配的是 Manual Deploy，推完代码还要去 Render 后台点一次部
 `ctx.net.on()` 返回取消订阅函数，必须在 `destroy()` 里全部调用。房间心跳 `setInterval` 与临时轮询器同理（`showLobby` 里都要 `clearInterval`）。
 
 **8. 其它**
-- 在线状态为内存态，重启后用户重新登录/心跳即恢复；好友关系在 db.json 里是持久的。
+- 在线状态为内存态，重启后用户重新登录/心跳即恢复；好友关系存在 SQLite `friendships` 表里，是持久的。
 - 人机模式不计分是**刻意防刷**，若后续要开放请同时设计防刷策略（如人机最高分段上限）。
 - `index.html` 里混杂了大量 `data-page-node-id="xxxx..."` 随机串（来自某个可视化页面编辑器），**是无意义的噪音**，可忽略；修改 HTML 结构时不建议依赖这些属性。
 
@@ -341,6 +343,9 @@ node tools/test-ai-gomoku.mjs
 # 3) 起本地服务 + curl 探活
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/
 curl -s http://localhost:3000/js/games/registry.js | grep -c "from './"   # 应为 8
+
+# 4) 服务端持久化回归测试（真起一个隔离端口的服务，写数据 -> 重启 -> 读回）
+node tools/test-server-persistence.mjs 4310     # 用临时 DATA_DIR，不碰真实数据
 ```
 
 > ⚠️ **不要直接对前端文件用 `node --check`**：`js/` 是 ES Modules 且仓库根目录没有 `package.json`，Node 会按 CommonJS 解析，17 个前端文件会全部误报 `Cannot use import statement outside a module`。`tools/check-syntax.mjs` 的做法是把前端 `.js` 复制为临时 `.mjs` 再检查，检查完自动清理。
@@ -354,7 +359,8 @@ curl -s http://localhost:3000/js/games/registry.js | grep -c "from './"   # 应�
 2. `node tools/test-ai-gomoku.mjs` 全绿（三档难度都能终局，不僵持/不死循环）；
 3. 关键纯函数（如胜负判定）单独断言正反例；
 4. 起服务 curl 确认新模块能 200 返回；
-5. 人机与真人两条链路都手动点一遍。
+5. 人机与真人两条链路都手动点一遍；
+6. 改过 `server/store.js`（表结构/列）或任何写库的路由 → 必跑 `node tools/test-server-persistence.mjs`。
 
 ---
 
@@ -370,7 +376,7 @@ git add -A && git commit -m "..." && git push origin main
 
 注意事项：
 - Free 计划冷启动较慢，首次访问可能要等几十秒。
-- 部署后 `server/data/db.json` 会被重置（见 §11 坑 2）。
+- 部署后 `server/data/couple-game.sqlite` 会被重置（Free 计划磁盘临时，见 §11 坑 2）。要跨部署保留数据，先挂 Persistent Disk 并设 `DATA_DIR`。
 - 线上核对内容时，`curl https://<host>` 可能返回 `426 Upgrade Required`（对根路径），建议改 curl 具体静态资源或接口来判断版本。
 
 ---
@@ -378,7 +384,7 @@ git add -A && git commit -m "..." && git push origin main
 ## 14. 后续优化建议（Roadmap）
 
 **稳定性（建议优先）**
-1. **数据持久化**：换 SQLite（单文件，改动最小）或外部 DB；外接后同时把房间/在线状态也放进存储，解决多实例与重启丢失。
+1. ~~数据持久化：换 SQLite~~ **已做（2026-09-07）**：`server/store.js` 改为 better-sqlite3，7 张表 + 索引，旧 `db.json` 首启一次性导入，回归测试见 `tools/test-server-persistence.mjs`。剩余：① Render Free 磁盘临时，需挂 Persistent Disk（设 `DATA_DIR`）或换 Postgres；② 多实例下的房间/在线状态共享（目前仍是单进程内存）。
 2. **看门狗/重连**：P2P 断线后的自动重连与状态恢复（当前断开只能重开房间）。
 3. **后端接收胜负上报做校验**：现在比分由前端上报 `/api/play`，存在作弊可能；若要更严谨，应改为由服务端（房主侧）权威结算。
 
@@ -401,6 +407,6 @@ git add -A && git commit -m "..." && git push origin main
 - 包含全部**源码 + 配置 + 文档 + 完整 Git 提交历史**（`.git`，506KB / 13 次提交，含详细 commit message，建议先 `git log --oneline` 过一遍）。
 - **未包含**：
   - `server/node_modules/`（18MB）—— 用 `cd server && npm install` 还原；
-  - `server/data/db.json` —— 含真实账号与密码哈希，**出于隐私未打包**；首次运行会自动重建并种入 `admin/888888`；
+  - `server/data/`（旧版是 `db.json`，现已迁为 SQLite）—— 含真实账号与密码哈希，**出于隐私未打包**；首次运行会自动重建并种入 `admin/888888`；
   - `push-to-github.bat` —— 内含本机的绝对路径，换机器不可用，改用 §13 的标准 git 命令。
 - 若不想让新环境误连原远端仓库，请删掉包内 `.git` 目录或执行 `git remote set-url origin <新地址>`。
