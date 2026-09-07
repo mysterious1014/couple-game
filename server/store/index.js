@@ -12,9 +12,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { COLLECTIONS, emptyData, toRows, fromRows, parseExtra } = require('./schema');
-const { createSqliteDriver } = require('./sqlite');
 const { prepareDriver, SCHEMA_VERSION } = require('./migrations');
-const { createPostgresDriver } = require('./postgres');
 
 const dataDir = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -29,9 +27,14 @@ function safeUrl(url) {
   return String(url).replace(/\/\/([^:@/]+):([^@/]+)@/, '//$1:****@');
 }
 
+// ⚠️ 两个驱动都做成「按需 require」，不要在文件顶层 require：
+//    better-sqlite3 是原生模块，线上 Node 版本一漂移就可能 ERR_DLOPEN_FAILED。
+//    顶层 require 会让那种损坏连 Postgres 模式一起拖死，按需加载才能保证
+//    「设了 DATABASE_URL 就绝不碰 sqlite 二进制」。
 function createDriver() {
   const url = process.env.DATABASE_URL;
   if (url) {
+    const { createPostgresDriver } = require('./postgres');
     const sslMode = process.env.PGSSLMODE || (/sslmode=(require|verify-full|no-verify)/.test(url) ? 'require' : 'disable');
     let ssl = false;
     if (sslMode === 'require') ssl = { rejectUnauthorized: false };
@@ -39,6 +42,7 @@ function createDriver() {
     else if (sslMode !== 'disable') ssl = true;
     return createPostgresDriver({ url, safeUrl: safeUrl(url), ssl });
   }
+  const { createSqliteDriver } = require('./sqlite');
   return createSqliteDriver({ file: sqliteFile });
 }
 

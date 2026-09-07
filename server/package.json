@@ -14,9 +14,11 @@
     "lint:syntax": "node ../tools/check-syntax.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
     "express": "^4.19.2",
     "peer": "^1.0.2",
     "pg": "^8.23.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
   }
 }
