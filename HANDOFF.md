@@ -344,8 +344,16 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 写失败不会崩，但会记进 `store.stats().lastError`，管理员用 `GET /api/admin/storage` 能看到。
 - ⚠️ 整数列在 Postgres 侧是 BIGINT(int8)，`pg` 默认按字符串返回（怕精度溢出）。驱动层注册了 `int8 -> Number` 解析，`server/store/schema.js` 的 `fromStored()` 又兜了一道，**两处都不要删**：否则 `user.score += 20` 会变成字符串拼接（`"1000" + 20` 得到 `100020`）。用外部工具直连库读数表时也要记得 `pg.types.setTypeParser(20, Number)`。
 
-**7. 改完代码 push 就行，别再手动点部署**
-线上 Auto-Deploy = **On Commit**：推 `main` 即自动构建部署（30–40s），改 `render.yaml` 会触发一次 Blueprint sync。部署历史在后台 Deploys 页，失败一定要看 Logs 里的退出原因。
+**7. 只有 `server/` 下的改动会自动部署（Root Directory 的坑，2026-09-07 定案）**
+线上 Auto-Deploy = **On Commit**，但服务的 **Root Directory = `server`**。Render 后台原文：「If set … code changes **outside of this directory do not trigger an auto-deploy**」。本轮实测对照：
+- `4885921` 只改 `server/package.json`、`server/package-lock.json`、`server/store/index.js` → 在 `server/` 内 → **Auto-Deploy 正常触发**。
+- `fc7c452` 只改 `HANDOFF.md`、`README.md`、`render.yaml` → 全在 `server/` 外 → **一次部署都没产生，连失败记录都没有**。当时误判成「webhook 漏投递 / Auto Sync 挂了」，白查很久。
+- 结论：改根目录文档、`render.yaml`、`tools/**` 想上线，必须去后台点 **「Manual Deploy → Deploy latest commit」**（只部署最新 commit，不动任何配置，安全；另一项「Clear build cache & deploy」见坑 10）。
+- 改 `render.yaml` 会触发一次 Blueprint sync —— sync 管的是**资源配置**，不等于把新 commit 部署到服务上。
+- 其余排查项已实测正常，别再查：Blueprint **Auto Sync = Yes**、服务 **Auto-Deploy = On Commit**、Included/Ignored Paths 均为空（没有路径过滤）。
+- 快速判断线上代码新旧：`curl.exe -s -o NUL -w '%{http_code} %{size_download}' https://chenting.cc.cd/render.yaml`，把返回字节数和新旧 commit 里该文件的大小对比（根目录被整体静态托管，见坑 12）。
+- 不想开后台：Blueprint 面板有 **Deploy Hook**，`curl` 一个带密钥的 URL 就能触发部署（密钥当 Secret 保管，**不要**提交进仓库）。
+- 💡 省事做法：**纯文档/工具类改动攒成一次 commit，再一次性 Manual Deploy**，别每改一版点一次。
 
 **8. 数据 Dispose/清理要成对**
 `ctx.net.on()` 返回取消订阅函数，必须在 `destroy()` 里全部调用。房间心跳 `setInterval` 与临时轮询器同理（`showLobby` 里都要 `clearInterval`）。
@@ -356,7 +364,6 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 人机模式不计分是**刻意防刷**，若后续要开放请同时设计防刷策略（如人机最高分段上限）。
 - `index.html` 里混杂了大量 `data-page-node-id="xxxx..."` 随机串（来自某个可视化页面编辑器），**是无意义的噪音**，可忽略；修改 HTML 结构时不建议依赖这些属性。
 
-
 **10. 换 Node 版本必须「Clear build cache & deploy」（2026-09-07 线上 exit-1 根因）**
 `better-sqlite3` 是原生模块，`.node` 二进制按 `NODE_MODULE_VERSION` 编译。改 `NODE_VERSION` 只重新部署**不会**重装缓存里的二进制：曾出现「按 Node 25（ABI 147）编译的 `better_sqlite3.node` 被 Node 22（需要 127）加载」→ `ERR_DLOPEN_FAILED` → 启动即 `Exited with status 1`，连续 3 次部署全栽这儿。
 - 正确姿势：后台「More → Clear build cache & deploy」。
@@ -366,6 +373,12 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 连接串里**不含** `sslmode`，而驱动默认 `disable` → 直连会被拒。必须同时设 `PGSSLMODE=require`（线上 env 与本地跑 `tools/migrate-storage.mjs` 时都一样）。
 - 内网/外网是两个不同 host：服务 env 用 Internal（`dpg-xxxx-a`），本地脚本必须用 DB 页面上的 **External** 串（`dpg-xxxx-a.oregon-postgres.render.com`）。
 - Free 库**到期即删无宽限期**（当前库 2026-10-07 过期），到期前用 `migrate-storage --from postgres --to sqlite` 反向拉一份回本地当备份。
+
+**12. 线上把整个仓库根目录当静态站暴露（已知现状，本轮刻意不动）**
+`server/index.js` 的静态中间件 `express.static(ROOT)` 里 `ROOT` 是**仓库根**，前面只用 `req.path.startsWith('/server')` 挡了源码目录（`server/index.js` 约 561-571 行）。实测 `https://chenting.cc.cd/render.yaml`、`/HANDOFF.md`、`/README.md`、`/tools/check-syntax.mjs` 全部 200 可下载。
+- 目前**不算新增泄露面**：GitHub 仓库本身是 public，`render.yaml`/文档里也刻意不写连接串与密码（密码在后台 Environment 页）。
+- ⚠️ **但一旦回退到 SQLite 就必须先收紧**：那时库里是真实用户数据，任何落在仓库根附近的备份/导出文件都会直接可被下载。
+- 2026-09-07 与用户确认：**这条只记录，不改代码**（怕动到现有页面路径）。下次真要收紧，正确做法是把静态根换成**白名单**（只暴露 `index.html`、`js/`、`css/`、`assets/` 等），而不是继续往黑名单上叠前缀。
 ---
 
 ## 12. 开发与验证工作流
@@ -427,7 +440,7 @@ GitHub mysterious1014/couple-game (main)
                  render.yaml 反而会让整次 sync 因重名创建失败），所以 render.yaml 里没有 databases: 段
 ```
 
-代码推送即自动部署（Auto-Deploy = On Commit）。一次部署约 30–40s。
+代码推送即自动部署（Auto-Deploy = On Commit），但**服务的 Root Directory = `server`** ⇒ 只有 `server/**` 的改动会自动触发；根目录文档 / `render.yaml` / `tools/**` 的改动要在后台点「Manual Deploy → Deploy latest commit」（详见 §11 坑 7）。一次部署约 30–40s。
 
 ### 13.2 环境变量（改这些都在后台 Environment 页，不要提交进仓库）
 
