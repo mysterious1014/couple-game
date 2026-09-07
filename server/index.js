@@ -8,11 +8,14 @@ const http = require('http');
 const crypto = require('crypto');
 const path = require('path');
 const { ExpressPeerServer } = require('peer');
-const { data, save } = require('./store');
+const { data, save, ready, stats } = require('./store');
 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json());
+
+// 存储层初始化可能是异步的（Postgres 走网络），所有请求先等它 ready
+app.use((req, res, next) => { ready.then(() => next(), next); });
 
 const PORT = process.env.PORT || 3000;
 const ROOT = path.join(__dirname, '..'); // couple-game 前端根目录
@@ -57,6 +60,16 @@ function requireAdmin(req, res, next) {
 }
 const SESSION_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 3600 * 1000 };
 
+// ---------- 健康检查与存储状态 ----------
+// /api/health 公开（Render 健康检查、部署后确认用的是哪个存储），不含任何业务数据
+app.get('/api/health', (req, res) => {
+  const s = stats();
+  res.json({ ok: true, driver: s.driver, schemaVersion: s.schemaVersion });
+});
+// /api/admin/storage 只有管理员能看，用来确认线上真的连上了外部数据库
+app.get('/api/admin/storage', requireAuth, requireAdmin, (req, res) => {
+  res.json(stats());
+});
 // ---------- 路由：账号 ----------
 app.post('/api/register', (req, res) => {
   const { username, password, nickname } = req.body || {};
@@ -569,17 +582,20 @@ function seedAdmin() {
   console.log('已创建默认管理员账号：admin / 888888（请尽快修改密码）');
 }
 
-seedAdmin();
+// data 在 ready 之前是空的（Postgres 要等网络），所以种子账号与字段补全都放在 ready 之后
+ready.then(() => {
+  seedAdmin();
 
-// 旧用户积分迁移：没有 score 字段的默认 1000
-let migrated = false;
-data.users.forEach((u) => {
-  if (typeof u.score !== 'number') { u.score = 1000; migrated = true; }
-  if (u.cpPartnerId === undefined) u.cpPartnerId = null;
-  if (u.cpSince === undefined) u.cpSince = null;
-  if (u.cpCode === undefined) u.cpCode = '';
+  // 旧用户积分迁移：没有 score 字段的默认 1000
+  let migrated = false;
+  data.users.forEach((u) => {
+    if (typeof u.score !== 'number') { u.score = 1000; migrated = true; }
+    if (u.cpPartnerId === undefined) u.cpPartnerId = null;
+    if (u.cpSince === undefined) u.cpSince = null;
+    if (u.cpCode === undefined) u.cpCode = '';
+  });
+  if (migrated) save();
 });
-if (migrated) save();
 
 // 自建 PeerJS 信令服务器（与 Express 同端口，路径 /peerjs）
 // 避免使用 PeerJS 默认国外云信令，解决国内创建房间卡住的问题

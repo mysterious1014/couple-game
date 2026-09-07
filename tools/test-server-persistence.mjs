@@ -10,13 +10,23 @@ import { spawn, spawnSync } from 'node:child_process';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const serverDir = path.join(repoRoot, 'server');
-const PORT = Number(process.argv[2] || 4310);
+// 用法：node tools/test-server-persistence.mjs [端口] [--url postgres://user:pw@host:port/db]
+// 不给 --url = 测默认的 SQLite 驱动；给了 = 测 Postgres 驱动（会先清掉该库里的本应用表）
+const argv = process.argv.slice(2);
+const PORT = Number(argv[0] || 4310);
+const pgUrl = argv.includes('--url') ? argv[argv.indexOf('--url') + 1] : '';
+const EXPECTED_DRIVER = pgUrl ? 'postgres' : 'sqlite';
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'couple-game-persist-'));
 const dataDir = path.join(tmp, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 
+function childEnv(dir, port) {
+  const env = Object.assign({}, process.env, { PORT: String(port || PORT), DATA_DIR: dir || dataDir });
+  if (pgUrl) env.DATABASE_URL = pgUrl;
+  return env;
+}
 let child = null;
 const logs = [];
 
@@ -25,10 +35,10 @@ function hashPassword(pw) {
   return salt + ':' + crypto.scryptSync(pw, salt, 32).toString('hex');
 }
 
-function startServer() {
+function startServer(dir, port) {
   child = spawn(process.execPath, ['index.js'], {
     cwd: serverDir,
-    env: Object.assign({}, process.env, { PORT: String(PORT), DATA_DIR: dataDir }),
+    env: childEnv(dir, port),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (b) => logs.push(String(b).trim()));
@@ -36,6 +46,7 @@ function startServer() {
 }
 
 async function stopServer() {
+  await new Promise((r) => setTimeout(r, 400));   // 等异步写队列落库
   if (!child) return;
   const proc = child;
   child = null;
@@ -88,13 +99,31 @@ fs.writeFileSync(path.join(dataDir, 'db.json'), JSON.stringify({
   sessions: {}, records: [], friendships: [], blocks: [], messages: [],
 }));
 
-console.log('== 1. 旧 db.json 一次性导入 SQLite ==');
+// Postgres 模式：先清掉这个库里的应用表，保证可以重复跑（只动我们自己那 7 张表）
+if (pgUrl) {
+  const { createRequire } = await import('node:module');
+  const requireFromServer = createRequire(path.join(serverDir, 'noop.js'));
+  const pg = requireFromServer('pg');
+  const client = new pg.Client({ connectionString: pgUrl });
+  await client.connect();
+  await client.query('DROP TABLE IF EXISTS users, sessions, game_records, friendships, blocks, messages, meta CASCADE');
+  await client.end();
+}
+
+console.log('== 1. 旧 db.json 一次性导入' + (pgUrl ? '（Postgres 驱动）' : '（SQLite 驱动）') + ' ==');
+
 startServer();
 await waitReady();
 const legacy = new Client();
 const legacyLogin = await legacy.post('/api/login', { username: 'legacyone', password: legacyPw });
 failures += check('旧账号可登录（密码哈希完整往返）', () => assert.strictEqual(legacyLogin.status, 200));
-failures += check('sqlite 文件已生成', () => assert.ok(fs.existsSync(path.join(dataDir, 'couple-game.sqlite'))));
+const health = await new Client().call('/api/health');
+failures += check('存储驱动符合预期（' + EXPECTED_DRIVER + '）', () => {
+  assert.strictEqual(health.body.ok, true);
+  assert.strictEqual(health.body.driver, EXPECTED_DRIVER);
+  assert.ok(health.body.schemaVersion >= 3, JSON.stringify(health.body));
+});
+if (!pgUrl) failures += check('sqlite 文件已生成', () => assert.ok(fs.existsSync(path.join(dataDir, 'couple-game.sqlite'))));
 failures += check('db.json 已改名备份', () => assert.ok(fs.readdirSync(dataDir).some((f) => /^db\.imported-\d+\.json$/.test(f))));
 
 console.log('== 2. 写入路径（注册/战绩/好友/私信）==');
@@ -161,37 +190,47 @@ failures += check('旧 db.json 未被重复导入（无第二个 imported 文件
 
 await stopServer();
 
-const HELPER_SRC = `// 直接 require server/store.js，验证「未登记字段」和「已知列里放对象」都不会丢
+// 直接 require server/store 门面（不是起 HTTP），验证字段保真：
+// 未登记的数组/嵌套对象、已知列里塞对象、数值列类型、中文字符串都要原样回来。
+const HELPER_SRC = `
 const path = require('path');
+const store = require(path.join(process.argv[3], 'store'));
 const mode = process.argv[2];
-const { data, save } = require(path.join(process.argv[3], 'store.js'));
-if (mode === 'write') {
-  data.users.push({
-    id: 'fidelity1', username: 'fidelity_one', nickname: '保真用户', password: 'x:y', role: 'user',
-    score: 7, createdAt: 1, lastLogin: null, cpPartnerId: null, cpSince: null, cpCode: '',
-    tags: ['a', { deep: true }],
-    metadata: { nested: { ok: 1 } },
-  });
-  data.messages.push({ id: 'mf1', fromId: 'fidelity1', toId: 'admin', type: 'chat', text: { weird: 'object' }, ts: 2, read: false });
-  save();
-  console.log('written');
-} else {
-  const u = data.users.find((x) => x.id === 'fidelity1') || null;
-  const m = data.messages.find((x) => x.id === 'mf1') || null;
-  console.log(JSON.stringify({ user: u, msgText: m ? m.text : null }));
-}`;
-console.log('== 4. store.js 字段保真（未登记字段 / 已知列放对象值）==');
+(async () => {
+  await store.ready;
+  const { data, save, flush } = store;
+  if (mode === 'write') {
+    data.users.push({
+      id: 'fidelity1', username: 'fidelity_one', nickname: '保真用户', password: 'x:y', role: 'user',
+      score: 7, createdAt: 1, lastLogin: null, cpPartnerId: null, cpSince: null, cpCode: '',
+      tags: ['a', { deep: true }],
+      metadata: { nested: { ok: 1 } },
+    });
+    data.messages.push({ id: 'mf1', fromId: 'fidelity1', toId: 'admin', type: 'chat', text: { weird: 'object' }, ts: 2, read: false });
+    save();
+    await flush();
+    console.log('written');
+  } else {
+    const u = data.users.find((x) => x.id === 'fidelity1') || null;
+    const m = data.messages.find((x) => x.id === 'mf1') || null;
+    console.log(JSON.stringify({ user: u, msgText: m ? m.text : null }));
+  }
+  process.exit(0);
+})();
+`;
+
+console.log('== 4. store 层字段保真（未登记字段 / 已知列放对象值）==');
 const helper = path.join(tmp, 'store-fidelity.cjs');
 fs.writeFileSync(helper, HELPER_SRC);
 function runHelper(mode) {
   return spawnSync(process.execPath, [helper, mode, serverDir], {
     cwd: serverDir,
     encoding: 'utf8',
-    env: Object.assign({}, process.env, { DATA_DIR: dataDir }),
+    env: childEnv(dataDir),
   });
 }
 const w = runHelper('write');
-failures += check('store.js 写入保真数据成功', () => assert.ok(w.status === 0 && w.stdout.includes('written'), 'exit=' + w.status + ' out=' + w.stdout + ' err=' + w.stderr));
+failures += check('store 写入保真数据成功', () => assert.ok(w.status === 0 && w.stdout.includes('written'), 'exit=' + w.status + ' out=' + w.stdout + ' err=' + w.stderr));
 const r = runHelper('read');
 const back = JSON.parse(r.stdout.trim().split('\n').pop());
 failures += check('未登记的数组字段（tags）原样读回', () => assert.deepStrictEqual(back.user.tags, ['a', { deep: true }]));
@@ -200,6 +239,65 @@ failures += check('已知列（messages.text）放对象也不丢，走 extra �
 failures += check('数值列仍是数值、文本未被字符串化污染', () => { assert.strictEqual(back.user.score, 7); assert.strictEqual(back.user.username, 'fidelity_one'); });
 failures += check('中文字段往返无损', () => assert.strictEqual(back.user.nickname, '保真用户'));
 
-fs.rmSync(tmp, { recursive: true, force: true });
+console.log('== 5. 旧库结构自动升级（v1 缺 seq / extra 列 -> v3）==');
+if (pgUrl) {
+  console.log('  SKIP 这条只针对 SQLite 老库（Postgres 模式跳过）');
+} else {
+  const { createRequire } = await import('node:module');
+  const requireFromServer = createRequire(path.join(serverDir, 'noop.js'));
+  const SQLite = requireFromServer('better-sqlite3');
+  const { COLLECTIONS } = requireFromServer('./store/schema');
+
+  // 造一个 v1 形状的库：列齐全但没有 seq（这正是 6c23eae 那版 store 建出来的结构）
+  const upgradeDir = path.join(tmp, 'upgrade-data');
+  fs.mkdirSync(upgradeDir, { recursive: true });
+  const v1File = path.join(upgradeDir, 'couple-game.sqlite');
+  const v1 = new SQLite(v1File);
+  v1.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  for (const def of COLLECTIONS) {
+    const cols = def.columns
+      .filter((c) => c.name !== 'seq')
+      .map((c) => '"' + c.name + '" ' + c.type + (c.pk ? ' PRIMARY KEY' : '') + (c.notNull ? ' NOT NULL' : '') + (c.unique ? ' UNIQUE' : ''));
+    // 旧版 sessions 表连 extra 都没有，这里如实还原成 (token, user_id)
+    if (def.key !== 'sessions') cols.push('"extra" TEXT');
+    v1.exec('CREATE TABLE ' + def.table + ' (' + cols.join(', ') + ')');
+    for (const idx of def.indexes || []) v1.exec('CREATE INDEX idx_' + def.table + '_' + idx + ' ON ' + def.table + ' (' + idx + ')');
+  }
+  v1.prepare('INSERT INTO users (id, username, nickname, password, role, score, createdAt, lastLogin, cpPartnerId, cpSince, cpCode)'
+    + ' VALUES (@id,@username,@nickname,@password,@role,@score,@createdAt,@lastLogin,@cpPartnerId,@cpSince,@cpCode)')
+    .run({ id: 'v1user', username: 'legacy_v1', nickname: '老库用户', password: hashPassword('v1pw1234'), role: 'user', score: 55, createdAt: 1, lastLogin: null, cpPartnerId: null, cpSince: null, cpCode: '' });
+  v1.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run('tk-v1-1', 'v1user');
+  v1.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('schema_version', '1');
+  v1.close();
+
+  startServer(upgradeDir);
+  await waitReady();
+  const health5 = await new Client().call('/api/health');
+  failures += check('结构版本已升到 v3', () => assert.ok(health5.body.schemaVersion >= 3, JSON.stringify(health5.body)));
+  const v1Client = new Client();
+  const v1Login = await v1Client.post('/api/login', { username: 'legacy_v1', password: 'v1pw1234' });
+  failures += check('老库账号仍可登录', () => assert.strictEqual(v1Login.status, 200));
+  const oldToken = new Client();
+  oldToken.cookie = 'sid=tk-v1-1';
+  const byOldCookie = await oldToken.call('/api/me');
+  failures += check('老库的 sessions.user_id 行迁移后仍然有效', () => {
+    assert.strictEqual(byOldCookie.status, 200);
+    assert.strictEqual(byOldCookie.body.id, 'v1user');
+  });
+  const adminClient = new Client();
+  const seeded = await adminClient.post('/api/login', { username: 'admin', password: '888888' });
+  failures += check('ready 之后才种入管理员（不会读到空 data）', () => assert.strictEqual(seeded.status, 200));
+  const adminList = await adminClient.call('/api/admin/users');
+  failures += check('管理员能看到老库用户 + 新建管理员', () => assert.strictEqual(adminList.body.length, 2, JSON.stringify({ status: adminList.status, body: adminList.body })));
+  const play5 = await v1Client.post('/api/play', { gameId: 'reversi', gameName: '黑白棋', opponent: '电脑', result: 'draw' });
+  failures += check('升级后的库仍可正常写入（积分 +2）', () => {
+    assert.strictEqual(play5.status, 200);
+    assert.strictEqual(play5.body.score, 57);
+  });
+  const storage5 = await adminClient.call('/api/admin/storage');
+  failures += check('升级后写库无残留错误（旧 sessions 表缺的 extra 已补齐）', () => assert.strictEqual(storage5.body.lastError, null, JSON.stringify(storage5.body)));
+  await stopServer();
+}
+fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 console.log(failures === 0 ? '\n== 全部通过 ==' : `\n== 失败 ${failures} 项 ==\n服务日志:\n` + logs.join('\n'));
 process.exit(failures === 0 ? 0 : 1);

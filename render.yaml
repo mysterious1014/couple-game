@@ -13,8 +13,13 @@ services:
       - key: NODE_VERSION
         value: "22"
       # ⚠️ Free 计划的磁盘是临时的：每次部署/重启都会清空 server/data/，SQLite 文件也一样丢。
-      # 升级 Starter 及以上并挂载 Persistent Disk 后，把下面这行取消注释，
-      # 数据就会落到挂载点（代码已支持 DATA_DIR 环境变量，见 server/store.js）。
+      # 推荐：New → Postgres 建一个数据库，把连接串放到下面这个变量里，
+      # 存储层会自动切到 Postgres 驱动（见 server/store/），数据就不再依赖实例磁盘。
+      # 老数据用 node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL" --apply 搬上去。
+      # - key: DATABASE_URL
+      #   value: postgres://user:password@host:5432/dbname
+      #
+      # 或者：升级 Starter 及以上并挂载 Persistent Disk，再打开下面这行指向挂载点。
       # - key: DATA_DIR
       #   value: /var/data/couple-game
     # Render 会自动注入 PORT 环境变量，server/index.js 已读取 process.env.PORT

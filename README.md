@@ -10,10 +10,20 @@
 
 ## 本地运行
 
+需要 Node.js 20 及以上（`better-sqlite3@12` 的要求）。
+
 ```bash
 cd server
 npm install
 npm start
+```
+
+开发期自测（都不用打开浏览器）：
+
+```bash
+node tools/check-syntax.mjs              # 全站语法检查
+node tools/test-ai-gomoku.mjs            # 五子棋 AI 三档难度跑完整对局
+node tools/test-server-persistence.mjs   # 存储层回归：写数据 -> 重启进程 -> 读回
 ```
 
 打开浏览器访问 `http://localhost:3000`：
@@ -59,7 +69,19 @@ npm start
 
 ### 4. 注意事项
 
-- **数据持久化**：账号/战绩/好友/私信已存进 SQLite（单文件，进程重启不再丢失）。但 **Render Free 计划的磁盘是临时的**，每次部署或重启仍会清空 `server/data/`，届时会自动重建默认管理员 `admin/888888`。要永久保存：升级实例并挂载 **Persistent Disk**，然后在 `render.yaml` 打开 `DATA_DIR` 指向挂载点；或改用外部数据库（PostgreSQL / MongoDB Atlas）。
+- **数据持久化**：账号/战绩/好友/私信存在数据库里，进程重启不再丢失。本地默认是单文件 SQLite（`server/data/couple-game.sqlite`）。
+- **但 Render Free 的磁盘是临时的**：每次部署/重启会清空 `server/data/`，SQLite 也随之丢失（会重建默认管理员 `admin/888888`）。**推荐做法：给服务挂一个 Postgres**，在 Render 环境变量里设 `DATABASE_URL`，代码会自动切到 Postgres 驱动，数据存在数据库服务里而不是实例磁盘上：
+
+  ```bash
+  # 1) 建好 Postgres 后，把本地已有账号搬上去（默认 dry-run，看清行数再加 --apply）
+  node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL"
+  node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL" --apply
+  # 2) 部署后确认驱动已切换
+  curl https://<host>/api/health     # 期望 {"ok":true,"driver":"postgres",...}
+  ```
+
+  另一条路是升级实例并挂载 **Persistent Disk**，再把 `render.yaml` 里的 `DATA_DIR` 注释打开指向挂载点。
+- **环境变量**：`PORT`（服务端口）、`DATABASE_URL`（设了就用 Postgres）、`PGSSLMODE`（`disable`/`require`/`no-verify`，默认按连接串里的 `sslmode` 推断）、`DATA_DIR` / `DATABASE_FILE`（改 SQLite 位置）。
 - **管理员密码**：默认密码是 `888888`，建议部署后通过后台管理页面尽快修改，或限制管理员账号的使用。
 - **HTTPS**：Render 默认提供 HTTPS，无需额外配置。
 
@@ -68,7 +90,7 @@ npm start
 - 前端：原生 HTML / CSS / JavaScript（ES Modules）
 - 实时同步：PeerJS（WebRTC 点对点）
 - 后端：Node.js + Express
-- 存储：SQLite（`better-sqlite3`，默认 `server/data/couple-game.sqlite`，可用 `DATA_DIR` / `DATABASE_FILE` 改位置）
+- 存储：双驱动 —— SQLite（默认，`better-sqlite3`）/ Postgres（设 `DATABASE_URL` 即启用，`pg`）；驱动层在 `server/store/`
 - 部署：Render Blueprint
 
 ## 项目结构
@@ -89,7 +111,7 @@ couple-game/
 │       └── draw.js         # 你画我猜
 ├── server/
 │   ├── index.js            # Express 服务
-│   ├── store.js            # SQLite 数据存储（对外仍是 { data, save } 接口）
+│   ├── store/              # 存储层：index(门面) / schema / ddl / migrations / sqlite / postgres
 │   └── package.json        # 后端依赖
 └── render.yaml             # Render 部署配置
 ```
