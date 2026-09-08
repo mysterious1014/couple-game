@@ -56,9 +56,9 @@ node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑
 4. Render 会自动读取 `render.yaml` 配置：
    - 服务名：可自定义
    - 根目录：`server`
-     ⚠️ 这一项同时限定了 Auto-Deploy 的范围：**只有 `server/**` 的改动会被自动部署**。只改仓库根的
-     文档 / `render.yaml` / `tools/**` 时，推完代码要去后台点「Manual Deploy → Deploy latest commit」，
-     否则线上一直是旧内容（这不是部署失败，Deploys 页根本不会有记录）。详见 `HANDOFF.md` §11 坑 7。
+     ⚠️ 这一项同时限定了 Auto-Deploy 的**触发**范围：**只有 `server/**` 的改动会自动触发部署**。只改仓库根的
+     文档 / `render.yaml` / `tools/**` 时，推完代码不会产生任何 Deploy 记录（这不是部署失败，Deploys 页
+     根本不会有条目），想主动上线得去后台点「Manual Deploy → Deploy latest commit」。但别把这条理解过头：部署时上线的是**整仓快照**，只要发生过一次部署（哪怕是被 `server/**` 触发的），根目录的文档 / 配置也会跟着一起更新。详见 `HANDOFF.md` §11 坑 7。
    - 构建命令：`npm install`
    - 启动命令：`npm start`
    - 计划：Free

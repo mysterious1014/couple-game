@@ -390,7 +390,8 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 线上 Auto-Deploy = **On Commit**，但服务的 **Root Directory = `server`**。Render 后台原文：「If set … code changes **outside of this directory do not trigger an auto-deploy**」。本轮实测对照：
 - `4885921` 只改 `server/package.json`、`server/package-lock.json`、`server/store/index.js` → 在 `server/` 内 → **Auto-Deploy 正常触发**。
 - `fc7c452` 只改 `HANDOFF.md`、`README.md`、`render.yaml` → 全在 `server/` 外 → **一次部署都没产生，连失败记录都没有**。当时误判成「webhook 漏投递 / Auto Sync 挂了」，白查很久。
-- 结论：改根目录文档、`render.yaml`、`tools/**` 想上线，必须去后台点 **「Manual Deploy → Deploy latest commit」**（只部署最新 commit，不动任何配置，安全；另一项「Clear build cache & deploy」见坑 10）。
+- 结论：**根目录改动不会「触发」部署，但会随任意一次部署的整仓快照一起上线**（服务把仓库根整体静态托管，见坑 12）。所以纯文档 / `tools/**` 改完之后想上线，两条路：等下一次 `server/**` 改动顺带带上去，或自己去后台点 **「Manual Deploy → Deploy latest commit」**（只部署最新 commit，不动任何配置，安全；另一项「Clear build cache & deploy」见坑 10）。
+- 2026-09-08 反证（修正上面这条的判断）：`dd7388f` 因改了 `server/index.js` 触发 Auto-Deploy，部署后线上 `/HANDOFF.md` 从 39219 → **50880 B**（正是该 commit 里的仓库版本），期间**没人点过 Manual Deploy** ⇒ 根目录文件确实跟着上了线。旧说法「根目录改动不上线」过强，准确表述是「**不触发部署，但会随快照上线**」。
 - 改 `render.yaml` 会触发一次 Blueprint sync —— sync 管的是**资源配置**，不等于把新 commit 部署到服务上。
 - 其余排查项已实测正常，别再查：Blueprint **Auto Sync = Yes**、服务 **Auto-Deploy = On Commit**、Included/Ignored Paths 均为空（没有路径过滤）。
 - 快速判断线上代码新旧：`curl.exe -s -o NUL -w '%{http_code} %{size_download}' https://chenting.cc.cd/render.yaml`，把返回字节数和新旧 commit 里该文件的大小对比（根目录被整体静态托管，见坑 12）。
@@ -498,7 +499,7 @@ GitHub mysterious1014/couple-game (main)
                  render.yaml 反而会让整次 sync 因重名创建失败），所以 render.yaml 里没有 databases: 段
 ```
 
-代码推送即自动部署（Auto-Deploy = On Commit），但**服务的 Root Directory = `server`** ⇒ 只有 `server/**` 的改动会自动触发；根目录文档 / `render.yaml` / `tools/**` 的改动要在后台点「Manual Deploy → Deploy latest commit」（详见 §11 坑 7）。一次部署约 30–40s。
+代码推送即自动部署（Auto-Deploy = On Commit），但**服务的 Root Directory = `server`** ⇒ 只有 `server/**` 的改动会**自动触发**部署；纯根目录文档 / `render.yaml` / `tools/**` 的改动不触发，想上线要么在后台点「Manual Deploy → Deploy latest commit」，要么等下一次 `server/**` 改动随整仓快照一起带上去（详见 §11 坑 7）。一次部署约 30–40s。
 
 ### 13.2 环境变量（改这些都在后台 Environment 页，不要提交进仓库）
 
@@ -531,8 +532,14 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
      -H 'Content-Type: application/json' -d '{}' https://chenting.cc.cd/api/match/report
 ```
 
-> 2026-09-08 **本地**实测（`tools/test-match-settlement.mjs` 会真起一个隔离端口的服务）：`/api/play` → 404、`/api/match/report` 未登录 → 401、`/api/rooms/0001/peers` 无凭据 → 403。
-> ⚠️ 上面 ①–④ **线上尚未复验**：commit `dd7388f` 改了 `server/index.js`，按 §11 坑 7 会触发 Auto-Deploy，但本机当天直连 `https://chenting.cc.cd` 全程 TLS reset（见 §13.6），跑不了验收。下次开代理第一件事就是把这 4 条补上。
+> **2026-09-08 线上已复验通过**（`dd7388f` 的 Auto-Deploy 成功，push 后约 1 分钟生效；当天更早时候因本机 TLS reset 一度没跑成，见 §13.6）：
+>
+> - ① `/api/health` → `{"ok":true,"driver":"postgres","schemaVersion":3}` ✅ 后端活着、走 Postgres、结构版本对。
+> - ④ `POST /api/play` → **404** ✅ 旧刷分入口已下线；`POST /api/match/report` 未登录 → **401** `{"error":"未登录"}` ✅ 新结算入口已就位且要身份。
+> - 前端新旧（字节数比法，§11 坑 7）：`/HANDOFF.md` → 200 / **50880 B**，等于 `dd7388f` 的仓库版本（上一版 39219 B）⇒ **新前端确实已上线**，顺带证明根目录文件会随部署快照一起上线。
+> - 另试 `GET /api/rooms/0001/peers` → 404 `{"error":"房间不存在"}`（线上没有这个房号，属正常）；「无凭据 → 403」的分支由 `tools/test-match-settlement.mjs` 在本地覆盖。
+>
+> 上面 ②③ 两条 curl 要账号密码，属按需抽查，本轮没跑线上。
 > **若 `/api/play` 还是 200，说明线上跑的是旧版后端**（多半是那次部署失败/没触发），此时症状是「能玩但不加分」。
 
 ### 13.4 数据搬迁与回拉
@@ -555,7 +562,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 - `https://couple-game.onrender.com` 返回 `426 Upgrade Required`：**不是我们的服务**。未占用的 onrender 子域返回 404，被 Blueprint 关掉的子域也返回 404，说明这个名字被别人的服务占了；我们服务的子域名在后台 Overview 的「Show more URLs」里。
 - 2026-09-07 21:44 之前那几次 `Exited with status 1` 全部是同一个原因（原生模块 ABI 不匹配，§11 坑 10），不是欠费、不是 426、不是冷启动。
-- **2026-09-08：本机直连 `https://chenting.cc.cd` 全部 TLS `Connection was reset`（HTTPS 与明文 HTTP 都 reset，`dns.google` / `cloudflare-dns.com` 同时超时），但 `github.com` / `render.com` 正常。** 是本机网络/代理问题（系统代理 `127.0.0.1:7897` 的客户端没开），**不是站点挂了**——2026-09-07 同一条命令是能通的。判断站点死活要用「代理开着」的通道，或直接看 Render 后台的 Deploy 日志。
+- **2026-09-08：本机直连 `https://chenting.cc.cd` 全部 TLS `Connection was reset`（HTTPS 与明文 HTTP 都 reset，`dns.google` / `cloudflare-dns.com` 同时超时），但 `github.com` / `render.com` 正常。** 是本机网络/代理问题（系统代理 `127.0.0.1:7897` 的客户端没开），**不是站点挂了**——2026-09-07 同一条命令是能通的。判断站点死活要用「代理开着」的通道，或直接看 Render 后台的 Deploy 日志。（2026-09-08 稍后代理恢复后实测确认：`dd7388f` 部署成功、站点一切正常，见 §13.3。）**当天连 `github.com:443` 的 `git push` 也会被 reset**，遇到 push 失败先怀疑网络，别怀疑仓库。）
 
 ---
 ## 14. 后续优化建议（Roadmap）
