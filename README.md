@@ -5,6 +5,8 @@
 - 五子棋（实时对战）
 - 你画我猜（实时同步笔迹）
 - 战绩与成就系统
+- 断线自动重连：掉线后自动重新握手并按消息日志恢复到断线前的局面，不用重开房间
+- 战绩由服务端结算：一局要双方都上报且结果互相印证才计分
 
 > 默认管理员账号：`admin` / `888888`，部署后请尽快修改或限制访问。
 
@@ -24,6 +26,8 @@ npm start
 node tools/check-syntax.mjs              # 全站语法检查
 node tools/test-ai-gomoku.mjs            # 五子棋 AI 三档难度跑完整对局
 node tools/test-server-persistence.mjs   # 存储层回归：写数据 -> 重启进程 -> 读回
+node tools/test-match-settlement.mjs     # 服务端结算回归：双方互补才计分 + 冲突/过期/频控/越权
+node tools/test-net-reconnect.mjs        # 断线重连回归：假 PeerJS 驱动真 net.js，验证重连握手与日志回放
 node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑同一套回归（需先 npm i --no-save embedded-postgres）
 ```
 
@@ -110,7 +114,7 @@ couple-game/
 │   ├── auth.js             # 登录/注册/战绩上报
 │   ├── views.js            # 我的战绩/管理后台视图
 │   ├── achievements.js     # 成就统计
-│   ├── net.js              # PeerJS 同步层
+│   ├── net.js              # PeerJS 同步层（含断线重连 + 消息日志回放）
 │   └── games/
 │       ├── registry.js     # 游戏注册表
 │       ├── gomoku.js       # 五子棋
@@ -125,7 +129,7 @@ couple-game/
 ## 添加新游戏
 
 1. 在 `js/games/` 下新建一个模块（参考 `gomoku.js` 或 `draw.js`）。
-2. 导出 `{ id, name, desc, mount(ctx) }`。
+2. 导出 `{ id, name, desc, mount(ctx) }`（本局若有「本地随机、不同步给对面」的私有状态，再加 `noReplay: true`）。
 3. 在 `js/games/registry.js` 中 import 并加入数组。
 4. 游戏大厅会自动多一张卡片。
 

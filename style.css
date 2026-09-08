@@ -1058,3 +1058,28 @@ button.primary.danger { background: linear-gradient(135deg, #ff7d9b, #ff5d7e); }
   width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
   color: #fff; font-weight: 700; font-size: 13px;
 }
+
+/* ---------- P2P 断线重连遮罩（net.js 状态驱动） ---------- */
+.net-overlay { display: none; }
+.net-overlay:not([hidden]) {
+  position: fixed; inset: 0; z-index: 60; padding: 16px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 9, 13, 0.68);
+  backdrop-filter: blur(6px);
+}
+.no-card {
+  width: 100%; max-width: 340px; text-align: center;
+  background: rgba(46, 22, 38, 0.97);
+  border: 1px solid var(--line);
+  border-radius: 22px; padding: 26px 22px; box-shadow: var(--shadow);
+  animation: pop 0.22s ease;
+}
+.no-ico { font-size: 34px; line-height: 1; animation: netPulse 1.4s ease-in-out infinite; }
+.no-title { margin-top: 10px; font-size: 18px; font-weight: 600; color: var(--text); }
+.no-sub { margin-top: 6px; font-size: 13px; color: var(--muted); line-height: 1.65; }
+.no-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.no-actions button { min-width: 116px; }
+@keyframes netPulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.04); }
+}

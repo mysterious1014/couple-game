@@ -58,7 +58,7 @@ let roomOwnedCode = null;      // 当前持有的真实房间号（用于页面�
 
 async function serverDeleteRoom(code) {
   try {
-    await fetch(`/api/rooms/${code}`, { method: 'DELETE' });
+    await fetch(`/api/rooms/${code}?secret=${encodeURIComponent(net.roomSecret || '')}`, { method: 'DELETE' });
   } catch { /* 忽略 */ }
 }
 
@@ -78,14 +78,65 @@ function stopRoomHeartbeat() {
   roomOwnedCode = null;
 }
 
+// 改房间（选游戏 / 状态 / 密码）必须带建房时下发的座位凭据，服务端据此拒绝外人乱改
 async function serverPatchRoom(code, patch) {
   try {
     await fetch(`/api/rooms/${code}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
+      body: JSON.stringify({ ...patch, secret: net.roomSecret || '' }),
     });
   } catch { /* 后端同步失败不影响 P2P 游戏 */ }
+}
+
+// ---------- P2P 结算：服务端权威，双方互相印证才计分 ----------
+// 每局结束各自上报一次自己看到的结果；服务端凑齐两份互补的声明才改分。
+// 先上报的一方拿 matchId 轮询，等对方确认后刷新积分显示。
+let roundHint = 0;      // 本房间内第几局（两端各自累加，服务端用它区分「一方已经开下一局」）
+async function settleP2P(gameId, gameName, result) {
+  try {
+    const r = await fetch('/api/match/report', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomCode: net.roomCode, gameId, gameName, result, roundHint }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { status: 'error', message: j.error || '结算请求失败' };
+    if (j.status === 'pending' && j.id) return (await waitMatchSettled(j.id)) || j;
+    return j;
+  } catch {
+    return { status: 'error', message: '网络异常，本局未结算' };
+  }
+}
+async function waitMatchSettled(matchId, budgetMs = 25000) {
+  const until = Date.now() + budgetMs;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1200));
+    try {
+      const r = await fetch(`/api/match/${encodeURIComponent(matchId)}`);
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j.status !== 'pending') return j;
+    } catch { /* 继续轮询 */ }
+  }
+  return { status: 'timeout' };
+}
+function applySettlement(j) {
+  const modal = $('resultModal');
+  const score = $('resultScore');
+  const open = modal && !modal.hidden;
+  const note = (txt) => { if (open) { score.style.fontSize = '14px'; score.textContent = txt; } };
+  if (j.status === 'settled') {
+    if (typeof j.score === 'number') Auth.applyScore(j.score);
+    if (open) { score.style.fontSize = ''; score.textContent = (j.delta > 0 ? '+' : '') + j.delta + ' 积分'; }
+    showToast('双方已确认，本局结算完成 ✅');
+    return;
+  }
+  if (j.status === 'conflict') note('双方上报的结果不一致，本局不计分');
+  else if (j.status === 'unsupported') note(j.error || '双方都登录后才会计分');
+  else if (j.status === 'throttled') note('结算太频繁，本局不计分');
+  else if (j.status === 'expired' || j.status === 'superseded') note('对方未确认，本局不计分');
+  else note(j.message || '本局未结算');
+  if (j.status !== 'unsupported') Sound.draw();
 }
 
 // ---------- 视图切换 ----------
@@ -134,7 +185,7 @@ function reportPresence(roomCode) {
   }).catch(() => {});
 }
 
-function showResultModal(result, delta, gameId) {
+function showResultModal(result, delta, gameId, note) {
   const modal = $('resultModal');
   const title = $('resultTitle');
   const desc = $('resultDesc');
@@ -165,6 +216,9 @@ function showResultModal(result, delta, gameId) {
   if (net && net.isAI) {
     score.textContent = '人机模式不计积分';
     score.style.fontSize = '14px';
+  } else if (note) {
+    score.style.fontSize = '14px';
+    score.textContent = note;
   } else if (typeof delta === 'number') {
     score.style.fontSize = '';
     score.textContent = (delta > 0 ? '+' : '') + delta + ' 积分';
@@ -496,15 +550,41 @@ document.querySelectorAll('[data-diff]').forEach((b) => {
 });
 $('aiClose').onclick = () => { $('aiModal').hidden = true; };
 
+// ---------- 断线重连遮罩（Roadmap ②） ----------
+function showNetOverlay(title, sub, canRetry) {
+  const box = $('netOverlay');
+  if (!box) return;
+  $('netOverlayTitle').textContent = title;
+  $('netOverlaySub').textContent = sub;
+  $('netRetryBtn').hidden = !canRetry;
+  box.hidden = false;
+}
+function hideNetOverlay() {
+  const box = $('netOverlay');
+  if (box) box.hidden = true;
+}
+
 function bindNetEvents(n) {
   n.onStatus((type, payload) => {
     if (type === 'connected') {
+      hideNetOverlay();
       updateRoomPlayers();
       if (!n.isHost) n.send('room_get_settings');
+      if (payload && payload.reconnected) showToast('已重新连接 ✅');
+    } else if (type === 'reconnecting') {
+      showNetOverlay('📶 连接中断', `正在尝试重新连接…（第 ${payload.attempt} 次）`, true);
+    } else if (type === 'resyncing') {
+      showNetOverlay('正在恢复这局', `按对方进度回放 ${payload.entries} 步…`, false);
+    } else if (type === 'resynced') {
+      hideNetOverlay();
+      if (payload && !payload.host && payload.entries) showToast('棋局已恢复到断线前 🎯');
     } else if (type === 'closed') {
+      hideNetOverlay();
       updateRoomPlayers();
       if (!game.hidden) {
-        alert('对方掉线了，返回大厅可重新连接');
+        const why = payload && (payload.reason === 'room-gone' || payload.reason === 'cancelled')
+          ? '房间已关闭，回到大厅重新开一个吧' : '对方掉线了，返回大厅可重新连接';
+        alert(why);
         showLobby();
       }
     } else if (type === 'error') {
@@ -513,8 +593,23 @@ function bindNetEvents(n) {
       updateRoomPlayers();
     }
   });
+  // 重连后由同步层按日志要求重建对局；不可回放的游戏就老实回到房间重开
+  n.onRebuild = (entries) => {
+    if (!lastGameId) return;
+    const gm = games.find((g) => g.id === lastGameId);
+    if (!gm || gm.noReplay) {
+      backToRoom();
+      showToast('这类对局无法恢复，已回到房间');
+      return;
+    }
+    startGame(lastGameId, { replay: entries });
+  };
 }
 bindNetEvents(net);
+
+// 重连遮罩上的两个按钮：立刻再试一次 / 放弃（只绑一次，换 Net 也不重复挂）
+if ($('netRetryBtn')) $('netRetryBtn').onclick = () => { if (net && net.retryReconnect) net.retryReconnect(); };
+if ($('netCancelBtn')) $('netCancelBtn').onclick = () => { if (net && net.cancelReconnect) net.cancelReconnect(); };
 
 // ---------- 公开房间列表 ----------
 function startPublicRoomPolling() {
@@ -699,7 +794,7 @@ function bindHostRoomEvents() {
       const r = await fetch(`/api/rooms/${net.roomCode}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pwd }),
+        body: JSON.stringify({ password: pwd, secret: net.roomSecret || '' }),
       });
       if (!r.ok) throw new Error('设置失败');
       roomPasswordSet = !!pwd;
@@ -716,7 +811,7 @@ function bindHostRoomEvents() {
       const r = await fetch(`/api/rooms/${net.roomCode}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: '' }),
+        body: JSON.stringify({ password: '', secret: net.roomSecret || '' }),
       });
       if (!r.ok) throw new Error('清除失败');
       roomPasswordSet = false;
@@ -764,7 +859,9 @@ net.on('room_get_settings', () => {
 net.on('start_game', (m) => startGame(m.gameId));
 
 // ---------- 游戏路由 ----------
-function startGame(id) {
+// opts.replay：重连后按日志重建这一局，此时不能清日志、也不能重置局数计数
+let lastGameId = '';
+function startGame(id, opts = {}) {
   const gm = games.find((g) => g.id === id);
   if (!gm) return;
   if (currentGame && currentGame.destroy) currentGame.destroy();
@@ -772,6 +869,10 @@ function startGame(id) {
   hideAll();
   game.hidden = false;
   $('gameTitle').textContent = gm.name;
+  if (!opts.replay) {
+    lastGameId = id;
+    if (!net.isAI) { net.resetJournal(); roundHint = 0; }
+  }
   if (net.isHost && net.roomCode && !net.isAI) {
     serverPatchRoom(net.roomCode, { status: 'playing' });
   }
@@ -782,8 +883,10 @@ function startGame(id) {
         showResultModal(result, 0, gameId);
         return;
       }
-      const j = await Auth.reportPlay(gameId, gameName, opponent, result, net.peerUsername || '');
-      showResultModal(result, j && typeof j.delta === 'number' ? j.delta : 0, gameId);
+      roundHint += 1;
+      showResultModal(result, null, gameId, '等待对方确认结算…');
+      const j = await settleP2P(gameId, gameName || gm.name, result);
+      applySettlement(j);
     },
   });
 }
@@ -791,6 +894,7 @@ function startGame(id) {
 function backToRoom() {
   if (currentGame && currentGame.destroy) currentGame.destroy();
   currentGame = null;
+  lastGameId = '';
   // 返回房间时把状态改回 waiting，方便再次开始
   if (net.isHost && net.roomCode && !net.isAI) {
     serverPatchRoom(net.roomCode, { status: 'waiting' });
@@ -904,6 +1008,7 @@ startPublicRoomPolling();
 // 页面关闭/刷新前，若当前持有真实房间，尝试立刻通知后端清理（避免房主直接关标签导致残留）
 window.addEventListener('beforeunload', () => {
   if (roomOwnedCode) {
-    try { navigator.sendBeacon && navigator.sendBeacon(`/api/rooms/${roomOwnedCode}/close`, new Blob([], { type: 'application/json' })); } catch {}
+    const body = JSON.stringify({ secret: (net && net.roomSecret) || '' });
+    try { navigator.sendBeacon && navigator.sendBeacon(`/api/rooms/${roomOwnedCode}/close`, new Blob([body], { type: 'application/json' })); } catch {}
   }
 });

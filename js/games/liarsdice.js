@@ -43,6 +43,8 @@ export default {
   id: 'liars',
   name: '吹牛',
   desc: '喊骰诈唬，看谁先被开',
+  // 自己那几颗骰子是本地随机、只在被开时才亮出来，日志里没有它 -> 断线重连只能重开
+  noReplay: true,
 
   mount(ctx) {
     const root = ctx.root;

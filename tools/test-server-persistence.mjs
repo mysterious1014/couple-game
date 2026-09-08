@@ -74,6 +74,22 @@ class Client {
   }
 }
 
+// 两个已登录客户端之间完成一次「双方互相印证」的结算（服务端权威记分，见 /api/match/report）。
+// 返回双方各自看到的最终结果：先上报的一方要靠 GET /api/match/:id 才知道结局。
+async function settle(host, guest, gameId, gameName, hostResult, guestResult, roundHint = 1) {
+  const rnd = Math.random().toString(36).slice(2, 8);
+  const created = await host.post('/api/rooms', { peerId: 'peer-h-' + rnd, hostName: '房主' });
+  if (created.status !== 200) throw new Error('建房失败 ' + JSON.stringify(created.body));
+  const code = created.body.code;
+  const joined = await guest.post(`/api/rooms/${code}/join`, { password: '' });
+  if (joined.status !== 200) throw new Error('加入房间失败 ' + JSON.stringify(joined.body));
+  await host.post('/api/match/report', { roomCode: code, gameId, gameName, result: hostResult, roundHint });
+  const guestView = await guest.post('/api/match/report', { roomCode: code, gameId, gameName, result: guestResult, roundHint });
+  const matchId = (guestView.body && guestView.body.id) || '';
+  const hostView = await host.call('/api/match/' + matchId);
+  return { code, secret: created.body.secret, guestSecret: joined.body.secret, matchId, hostView: hostView.body, guestView: guestView.body };
+}
+
 async function waitReady() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -133,8 +149,17 @@ const regA = await a.post('/api/register', { username: 'persist_a', password: 'p
 const regB = await b.post('/api/register', { username: 'persist_b', password: 'pw123456', nickname: '阿 B' });
 failures += check('两个测试账号注册成功', () => { assert.strictEqual(regA.status, 200); assert.strictEqual(regB.status, 200); });
 
-const play = await a.post('/api/play', { gameId: 'gomoku', gameName: '五子棋', opponent: '阿 B', result: 'win' });
-failures += check('战绩上报后积分 +20', () => { assert.strictEqual(play.status, 200); assert.strictEqual(play.body.score, 1020); });
+const settled1 = await settle(a, b, 'gomoku', '五子棋', 'win', 'lose');
+failures += check('双方确认后 A（胜方）积分 +20', () => {
+  assert.strictEqual(settled1.hostView.status, 'settled', JSON.stringify(settled1.hostView));
+  assert.strictEqual(settled1.hostView.score, 1020);
+});
+failures += check('双方确认后 B（负方）积分 -15', () => {
+  assert.strictEqual(settled1.guestView.status, 'settled', JSON.stringify(settled1.guestView));
+  assert.strictEqual(settled1.guestView.score, 985);
+});
+const retired = await a.post('/api/play', { gameId: 'gomoku', result: 'win' });
+failures += check('POST /api/play 不再存在（防刷分）', () => assert.strictEqual(retired.status, 404));
 
 const reqRel = await a.post('/api/friends/request', { username: 'persist_b' });
 failures += check('A 向 B 发起好友请求', () => assert.strictEqual(reqRel.status, 200));
@@ -299,10 +324,10 @@ if (pgUrl) {
   failures += check('ready 之后才种入管理员（不会读到空 data）', () => assert.strictEqual(seeded.status, 200));
   const adminList = await adminClient.call('/api/admin/users');
   failures += check('管理员能看到老库用户 + 新建管理员', () => assert.strictEqual(adminList.body.length, 2, JSON.stringify({ status: adminList.status, body: adminList.body })));
-  const play5 = await v1Client.post('/api/play', { gameId: 'reversi', gameName: '黑白棋', opponent: '电脑', result: 'draw' });
-  failures += check('升级后的库仍可正常写入（积分 +2）', () => {
-    assert.strictEqual(play5.status, 200);
-    assert.strictEqual(play5.body.score, 57);
+  const settled5 = await settle(v1Client, adminClient, 'reversi', '黑白棋', 'draw', 'draw');
+  failures += check('升级后的库仍可正常写入（双方平局各 +2）', () => {
+    assert.strictEqual(settled5.hostView.status, 'settled', JSON.stringify(settled5));
+    assert.strictEqual(settled5.hostView.score, 57);
   });
   const storage5 = await adminClient.call('/api/admin/storage');
   failures += check('升级后写库无残留错误（旧 sessions 表缺的 extra 已补齐）', () => assert.strictEqual(storage5.body.lastError, null, JSON.stringify(storage5.body)));

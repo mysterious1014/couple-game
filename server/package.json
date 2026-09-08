@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node index.js",
     "test:persistence": "node ../tools/test-server-persistence.mjs",
+    "test:match": "node ../tools/test-match-settlement.mjs",
+    "test:net": "node ../tools/test-net-reconnect.mjs",
     "test:ai": "node ../tools/test-ai-gomoku.mjs",
     "lint:syntax": "node ../tools/check-syntax.mjs"
   },

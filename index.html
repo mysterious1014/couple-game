@@ -253,6 +253,19 @@
   <!-- 邀请/私信通知区 -->
   <div id="notifyArea" class="notify-area"></div>
 
+  <!-- P2P 断线重连遮罩：net.js 的状态回调驱动显示/隐藏 -->
+  <div id="netOverlay" class="net-overlay" hidden>
+    <div class="no-card">
+      <div class="no-ico">📶</div>
+      <div class="no-title" id="netOverlayTitle">连接中断</div>
+      <div class="no-sub" id="netOverlaySub">正在尝试重新连接…</div>
+      <div class="no-actions">
+        <button id="netRetryBtn">立即重试</button>
+        <button id="netCancelBtn" class="ghost">放弃并返回大厅</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

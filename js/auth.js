@@ -56,23 +56,11 @@ export const Auth = {
     this._notify();
   },
 
-  async reportPlay(gameId, gameName, opponent, result, opponentUsername = '') {
-    if (!this.me) return null;
-    try {
-      const r = await fetch('/api/play', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId, gameName, opponent, result, opponentUsername }),
-      });
-      if (r.ok) {
-        const j = await r.json().catch(() => ({}));
-        if (typeof j.score === 'number') {
-          this.me.score = j.score;
-          this.renderAuthArea();
-        }
-        return j;
-      }
-    } catch { /* 上报失败不影响游戏 */ }
-    return null;
+  // 结算后的积分直接采用服务端返回的那份，不再由客户端自己算（见 /api/match/report）
+  applyScore(score) {
+    if (!this.me || typeof score !== 'number') return;
+    this.me.score = score;
+    this.renderAuthArea();
   },
 
   isAdmin() { return !!(this.me && this.me.role === 'admin'); },

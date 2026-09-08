@@ -15,6 +15,8 @@ export default {
   id: 'draw',
   name: '你画我猜',
   desc: '一人画一人猜，笔迹实时同步',
+  // 本轮密词是本地随机、不经消息同步的，断线重连后没法照日志复原 -> 只能重开一局
+  noReplay: true,
 
   mount(ctx) {
     const root = ctx.root;

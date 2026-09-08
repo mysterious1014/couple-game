@@ -78,9 +78,9 @@ couple-game/
 │
 ├── js/
 │   ├── app.js              # ★ 主控：路由切换、房间流程、大厅、公开房间轮询、心跳
-│   ├── net.js              # ★ 通信层 Net 类（PeerJS 封装）：host/join/send/on
+│   ├── net.js              # ★ 通信层 Net 类（PeerJS 封装）：host/join/send/on + 断线重连与消息日志回放
 │   ├── ai.js               # ★ AI：AINet 类（与 Net 同接口）+ 8 个游戏大脑 + createBrain
-│   ├── auth.js             # 登录/注册/登出、Auth.me 状态、战绩上报 reportPlay
+│   ├── auth.js             # 登录/注册/登出、Auth.me 状态、结算后刷新本地分数 applyScore
 │   ├── views.js            # 「我的战绩」「管理后台」「排行榜」视图渲染 + tierOf 段位
 │   ├── friends.js          # 好友页：三标签（好友/请求/黑名单）、私聊、邀请
 │   ├── achievements.js     # 依据战绩实时计算统计与 10 个成就徽章（纯前端）
@@ -138,12 +138,19 @@ couple-game/
 共享接口：`net.me`（1=房主/红方，2=加入者/蓝方）、`net.peerName`、`net.isAI`、`net.roomCode`、`net.isHost`、`net.send(type, data)`、`net.on(type, cb)`、`net.onStatus(cb)`。
 **给 AI 加任何新能力前，先确认 `AINet` 是否也实现了，否则人机模式会静默失效。**
 
-### 5.2 房间生命周期
-- 房主 `POST /api/rooms` 得到 4 位数字房间号（0001–9999 顺序分配），把自己的真实 peerId 注册到服务端。
-- 加入者 `POST /api/rooms/:code/join` → 服务端校验密码 → 返回房主 peerId → 建立 P2P。
+**只有 `Net` 有、`AINet` 没有的部分**（2026-09-08 断线重连引入，人机模式用不到，但游戏模块别去依赖它们）：
+`net.roomSecret`（座位凭据，§5.2）、`net.journal`（本局消息日志，§5.4）、`net.reconnecting`、`net.onRebuild(journal)`、`net.replayJournal()`、`net.resetJournal()`、`net.retryReconnect()`、`net.cancelReconnect()`。
+真人链路上 `onStatus` 的 type 多出 `reconnecting` / `resyncing` / `resynced`，`closed` 带 `reason`（`left` 主动离开、`gave-up` 重连放弃、`room-gone` 房间已被回收、`cancelled` 用户点取消）——`js/app.js` 用这些驱动 `#netOverlay` 遮罩。
+
+### 5.2 房间生命周期（2026-09-08 起带座位凭据）
+- 房主 `POST /api/rooms` 得到 4 位数字房间号（0001–9999 顺序分配）**和 `secret`（房主座位凭据）**，同时把真实 peerId 注册到服务端。
+- 加入者 `POST /api/rooms/:code/join` → 服务端校验密码 → 返回房主 peerId **+ `secret`（访客座位凭据）** → 建立 P2P。两个 secret 由 `newSecret()`（12 字节 hex）生成，只存在于前端 `Net.roomSecret` 和内存 `rooms[code].hostSecret/guestSecret`，**不落库、不重启存活**（房间本来就是内存态）。
+- **改房 / 关房 / 删房 / 登记 peerId / 查对方 peerId 一律要出示座位凭据**（`checkSeat(room, role, secret)`，不匹配 403）。这之前任何人只要猜到 4 位房间号，就能关掉别人的房、改掉密码、把自己的 peerId 投毒进去顶掉座位。
+- 重连时 PeerID 会变（页面没刷新、PeerJS 重新发 ID），所以配了两个端点：`POST /api/rooms/:code/seat` `{role, peerId, secret}` 登记自己的新 peerId；`GET /api/rooms/:code/peers?role=&secret=` 取对方的 peerId 与房间状态。
 - **仅登录用户创建的无密码房间进入公开列表**（防止游客房间刷屏）。
 - 房主每 30s 心跳 `POST /api/rooms/:code/heartbeat`；服务端每 30s 扫描，**90s 无心跳自动删房**；另有 24h 兜底清理。
-- 返回大厅 → `DELETE /api/rooms/:code`；直接关标签页 → `beforeunload` 用 `navigator.sendBeacon` 打 `/close`。
+- 返回大厅 → `DELETE /api/rooms/:code?secret=`；直接关标签页 → `beforeunload` 用 `navigator.sendBeacon` 打 `/close`（body 里带 `{secret}`）。注意 `/close` 对**不存在的房间**直接放行，避免 beacon 误报。
+- 房间字段（`server/index.js` 内注释即权威清单）：原有 `code/peerId/password/hostName/hostUserId/players/status/gameId/gameName/createdAt/lastHeartbeat/public`，本轮加 `hostPeerId/guestPeerId/hostSecret/guestSecret/guestName/guestUserId/matchRound/currentMatchId/lastSettledAt`。
 
 ### 5.3 后端
 Express 单文件，顺序即大致职责：静态托管 → 屏蔽 `/server` 源码 → 鉴权 → 健康检查 → 房间 → 好友 → CP → 消息 → 排行榜 → 后台。
@@ -153,6 +160,35 @@ Express 单文件，顺序即大致职责：静态托管 → 屏蔽 `/server` �
 - `index.js` 只认 `{ data, save, ready, stats }`：`data` 是 6 个内存集合，路由照旧 push/filter/改字段，`save()` 负责落库。
 - 落库按集合做 JSON 快照比对，**内容没变的表整表跳过**，所以登录一次只重写 users + sessions。
 - 因为 Postgres 写入是异步的，`index.js` 在 `express.json()` 之后挂了 ready 门禁中间件，并把 `seedAdmin()` 放进 `ready.then()`。**别在顶层同步读 `data`**（SQLite 下能读到，PG 下会是空数组）。
+
+### 5.4 断线重连 + 服务端权威结算（2026-09-08，Roadmap ②③）
+
+**① 重连状态机（`js/net.js`）**：断开后按 `RECOVER_DELAYS = [800,1600,3000,5000,8000,12000]` 退避，约 30s 内试 6 次，分两级恢复：
+
+1. `_softRecover()` — 先让 PeerJS 自己恢复（代价最小，ID 不变，对方无感）。
+2. `_rehandshake()` — 不行就换新 PeerID → `POST /seat` 登记 → `GET /peers` 拿对方 → 重新握手，`_waitReady()` 等 DataConnection open。
+3. 6 次都不成 → `closed{reason:'gave-up'}`，遮罩上留「重试 / 取消」两钮（`retryReconnect()` / `cancelReconnect()`）。
+4. 后端回 404（房间已被 GC）→ 立刻 `closed{reason:'room-gone'}`，不再白等。
+
+**② 消息日志与回放**：除 `CONTROL_TYPES`（`hello/chat/start_game/room_set_game/room_settings/room_get_settings/resync*`）外的消息，收发两侧都按序进 `net.journal`（上限 `MAX_JOURNAL=4000`）。重连成功后两端在 `hello` 里互报 `{journal: 长度, last: 末条类型}`：
+
+- 完全一致 → 直接续打；
+- **日志长的一方为权威**（同长比末条类型，再同则房主），短的一方 `resync_request` → 权威方回整份 `resync` → 接收方覆盖自己的 journal，先调 `net.onRebuild(journal)`（上层重建对局），再 `replayJournal()` 把每条消息灌回各游戏的 `net.on` 处理器，最后发 `resync_done`。
+- **回放期间 `send()` 只记不发**（`_replay` 标志），否则会把重建出来的局面再广播一遍；回放中新到的线上消息暂存 `_inbox`，回放完按序补投。
+- 换游戏 / 回房间时 `net.resetJournal()`，日志不跨局。
+- `js/app.js` 的 `onRebuild` 只对**可回放**的游戏重建：拿 `lastGameId` 找模块，若 `gm.noReplay` 或找不到 → 直接回房间页（连接恢复了，但本局作废）。
+
+**③ 服务端权威结算（`server/index.js`）**：`POST /api/play`（前端单方面报比分就能加分的入口）已**删除**，改为双方互相印证：
+
+- 每人各调一次 `POST /api/match/report` `{roomCode, gameId, gameName, result, roundHint}`；`requireAuth`，且调用者必须命中 `seatOf(room, uid)`（不在这个房间的座位里就 403）。
+- 第一份声明进 `pending`；第二份到了才判：`isComplementary()` 要求 **win↔lose 或 draw↔draw**，互补才结算。
+- `settleMatch()`：`SCORE_DELTA = {win:20, lose:-15, draw:2}`，改两人 `score`、各写一条 `game_records`（`mode:'p2p'`；**对手的显示名取自库里的用户资料，不采信客户端传来的 opponent**），然后 `save()` 落库。
+- 状态机：`pending` / `settled` / `conflict`（两边都报自己赢）/ `expired`（`MATCH_PENDING_TTL_MS`，默认 90s 没人认领）/ `superseded`（换游戏了，或 `roundHint` 对不上=一方已开下一局）/ `throttled`（同房间两次结算间隔 < `MATCH_SETTLE_GAP_MS` = 8s）/ `unsupported`（对面是游客或 AI，不计分）。
+- 先上报的一方用 `GET /api/match/:id` 轮询（前端 `waitMatchSettled()`，最多 25s），拿到 `settled` 才刷新分数与结算文案（`applySettlement()`）。
+- `matches` 与 `rooms` 同为进程内存态；GC 每 30s 跑一次：`pending` 过期即清，已结束的回执留 10 分钟给人轮询。**只有结算后的战绩落库。**
+- 可测性：`MATCH_PENDING_TTL_MS` 支持环境变量覆盖（回归测试用 1500ms 跑过期分支，不真等 90s）。
+
+> 说人话：想给自己加分，必须让对方点一次「我输了」。对情侣应用这个成本足够高了；真正的收益是**误报不再算数**——刷新页面、脚本连点、双开客户端都刷不出分。
 
 ---
 
@@ -168,6 +204,7 @@ export default {
   name: '五子棋',                   // 大厅卡片标题
   desc: '15×15 棋盘，先连成五子者胜', // 卡片副标题
   mount(ctx) { return { destroy(), restart() }; },
+  noReplay: true,                // 可选：本局含「本地随机且不同步的私有状态」，断线重连不要回放它（§5.4）
 };
 ```
 
@@ -178,7 +215,7 @@ export default {
 | `ctx.root` | 游戏要渲染进去的 DOM 容器 |
 | `ctx.net` | 通信对象（真人或 AI），见 §5.1 |
 | `ctx.back` | 返回房间的回调 |
-| `ctx.reportPlay(gameId, gameName, opponent, result)` | 上报战绩，`result ∈ 'win' \| 'lose' \| 'draw'` |
+| `ctx.reportPlay(gameId, gameName, opponent, result)` | 把本局结果交给服务端结算（`result ∈ 'win' \| 'lose' \| 'draw'`）。**要对面也上报互补结果才会计分**，人机模式直接弹结算窗不计分 |
 
 约定与要求：
 
@@ -188,6 +225,7 @@ export default {
 4. `destroy()` 必须解绑所有 `ctx.net.on(...)` 返回的取消订阅函数，否则切游戏会泄漏监听。
 5. 终局调用 `ctx.reportPlay(...)`，并用闭包内 `finished` 标志防止重复上报；`reset()` 里要重置它。
 6. 音效统一从 `js/sound.js` 引入 `Sound`（`place` / `click` / `match` / `invalid` / `win` / `lose` / `draw`）。
+7. **新增游戏若含「本地随机出来、又不通过消息同步的私有状态」（随机密词、随机骰子、随机手牌），必须标 `noReplay: true`**。否则断线重连回放日志时两边会重建出两个不同的局面（`draw.js` / `liarsdice.js` 就是这种，已标）。凡是「局面完全由双方消息决定」的游戏（五子棋、 dots、记忆翻牌、井字棋、UNO 的出牌动作等）默认可回放，不用标。
 
 ### 6.2 新增一款游戏的完整步骤
 
@@ -209,7 +247,8 @@ export default {
 | POST | `/api/logout` | – | 登出，清会话与在线状态 |
 | GET | `/api/me` | – | 当前登录用户（含 `score`、`cpPartner`） |
 | GET | `/api/me/records` | ✔ | 我的对局记录（含 `opponentUsername`、`delta`） |
-| POST | `/api/play` | ✔ | 上报战绩，`{gameId,gameName,opponent,result,opponentUsername}` → `{ok,score,delta}` |
+| POST | `/api/match/report` | ✔ | 上报本局结果 `{roomCode,gameId,gameName,result,roundHint}`，**双方互补才结算** → `{id,status,delta,score,...}`（§5.4） |
+| GET | `/api/match/:id` | ✔ | 轮询某局结算状态（先上报的一方等对方）→ `matchView` |
 | POST | `/api/presence` | ✔ | 在线心跳，`{roomCode?,offline?}`，90s TTL |
 | GET | `/api/friends` | ✔ | 好友/来/往请求列表 + 好友的 `note`/`group` + `blocks` + `pendingCount` |
 | POST | `/api/friends/request` | ✔ | 按用户名发好友请求（含自加/不存在/已好友/被拉黑校验） |
@@ -225,13 +264,15 @@ export default {
 | GET | `/api/messages/unread` | ✔ | 未读消息（返回 `fromName`，拉取后标记已读） |
 | GET | `/api/leaderboard` | – | 积分排行榜（含 `rank`） |
 | GET | `/api/rooms` | – | 公开房间列表（仅登录用户建的、无密码、waiting） |
-| POST | `/api/rooms` | ✔ | 创建房间，返回 4 位房间号 |
+| POST | `/api/rooms` | ✔ | 创建房间 → `{code, secret, room}`，`secret` 是房主座位凭据 |
 | GET | `/api/rooms/:code` | – | 查询房间是否存在 / 是否有密码 |
-| POST | `/api/rooms/:code/join` | – | 加入房间（校验密码），返回房主 peerId |
-| PATCH | `/api/rooms/:code` | – | 改 `password` / `gameId` / `gameName` / `status` |
-| POST | `/api/rooms/:code/heartbeat` | – | 房主心跳 |
-| POST | `/api/rooms/:code/close` | – | 关闭房间（兼容 `sendBeacon`） |
-| DELETE | `/api/rooms/:code` | – | 删除房间 |
+| POST | `/api/rooms/:code/join` | – | 加入房间（校验密码）→ `{code, peerId, secret}`，`secret` 是访客座位凭据 |
+| POST | `/api/rooms/:code/seat` | – | 重连用：登记自己的新 peerId，`{role, peerId, secret}`（凭据不对 403） |
+| GET | `/api/rooms/:code/peers` | – | 重连用：取对方 peerId 与房间状态，`?role=&secret=`（凭据不对 403） |
+| PATCH | `/api/rooms/:code` | 房主座位 | 改 `password` / `gameId` / `gameName` / `status` / `players`，body 需带 `secret` |
+| POST | `/api/rooms/:code/heartbeat` | – | 房主心跳（保持房间存活，不校验凭据） |
+| POST | `/api/rooms/:code/close` | 房主座位 | 关闭房间（兼容 `sendBeacon`，body 带 `secret`；房间已不存在则放行） |
+| DELETE | `/api/rooms/:code` | 房主座位 | 删除房间，`?secret=` |
 | GET | `/api/health` | – | `{ ok, driver, schemaVersion }`，部署后确认连的是哪个存储 |
 | GET | `/api/admin/storage` | 管理员 | `store.stats()`：驱动、位置、各集合行数、`lastError` |
 | GET | `/api/admin/users` | 管理员 | 全部用户（含积分） |
@@ -263,12 +304,13 @@ export default {
 | 规则 | 取值 |
 |---|---|
 | 注册初始积分 | **1000**（管理员 99999，不参与排名） |
-| 胜负积分 | 胜 **+20**、负 **−15**、平 **+2** |
-| 人机对战 | **不计积分**（`js/app.js` reportPlay 回调里 `if (net.isAI) return`），防刷分 |
+| 胜负积分 | 胜 **+20**、负 **−15**、平 **+2**（常量在 `server/index.js` 的 `SCORE_DELTA`） |
+| 真人对战计分 | **双方各上报一次且结果互补**（win↔lose / draw↔draw）才结算，见 §5.4；单方声明只进 `pending`，90s 无人认领即过期不计分；同房间两次结算间隔须 ≥8s |
+| 人机对战 | **不计积分**（`js/app.js` reportPlay 回调里 `if (net.isAI)` 直接弹结算窗），防刷分 |
 | 段位（`views.js` tierOf） | 1700 星耀🌟 / 1500 钻石👑 / 1350 铂金💎 / 1200 黄金🥇 / 1100 白银🥈 / 1000 青铜🥉 / 其他 新手🌱 |
 | 排行榜名次图标 | 第1🥇 第2🥈 第3🥉 其余💕（段位放 `title`） |
 | 成就 | `achievements.js` 依据 `/api/me/records` 前端实时算，10 个徽章 |
-| 游客 | 可以创建/加入房间、以临时昵称游玩，**但不能创建公开房间**（需登录）、也不能上线状的 CP/好友功能 |
+| 游客 | 可以创建/加入房间、以临时昵称游玩，**但不能创建公开房间**（需登录）、不能上线状的 CP/好友功能；**游客对局不计分**（`/api/match/report` 需登录，且要求房间两个座位都是登录账号，否则回 `unsupported`） |
 | 私聊 / 邀请 | 仅限已是好友（accepted）且双向未拉黑 |
 | CP 绑定 | 双方用同一邀请码绑定成功后互相展示 ❤️ 横幅 |
 
@@ -379,7 +421,15 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 目前**不算新增泄露面**：GitHub 仓库本身是 public，`render.yaml`/文档里也刻意不写连接串与密码（密码在后台 Environment 页）。
 - ⚠️ **但一旦回退到 SQLite 就必须先收紧**：那时库里是真实用户数据，任何落在仓库根附近的备份/导出文件都会直接可被下载。
 - 2026-09-07 与用户确认：**这条只记录，不改代码**（怕动到现有页面路径）。下次真要收紧，正确做法是把静态根换成**白名单**（只暴露 `index.html`、`js/`、`css/`、`assets/` 等），而不是继续往黑名单上叠前缀。
----
+
+**13. 结算接口改了必须两端同时更新（2026-09-08）**
+`/api/play` 已删除、换成 `/api/match/report`。**旧前端 + 新后端 = 打完一局不计分**（前端拿到 404，本地分数不动，也不弹错误）；新前端 + 旧后端 = 同样不计分（404/401）。前后端同仓库同部署，正常不会劈叉；**但线上部署失败、只剩旧版在跑时，症状就是「能玩但不加分」**，用 `curl -X POST /api/play` 是否 404 判定后端版本（§13.3）。
+
+**14. 自由实时类游戏的两端日志顺序可能不同**
+点格棋 / UNO 这类「双方都能随时连发多条消息」的游戏，同一瞬间的两条消息在两边的记录顺序可能相反，重连 resync 时以**权威方（日志长的一方）**为准整份覆盖。表现是重连后与断线前有一两步细微差异，但**不会出现两边局面不一致的死局**。回合制的五子棋/井字棋/记忆翻牌无此问题。
+
+**15. `noReplay` 游戏的重连语义 = 连接恢复、本局作废**
+你画我猜（随机密词）、吹牛骰（本地随机骰子）标了 `noReplay: true`：重连后 `js/app.js` 的 `onRebuild` 把玩家送回房间页，而不是恢复到半局。别为了「体验更好」去掉标记——那会重建出一个错误的私有状态，比回房间更糟。
 
 ## 12. 开发与验证工作流
 
@@ -403,7 +453,13 @@ node tools/test-server-persistence.mjs 4310 --url postgres://user:pw@host:5432/c
 #   cd server && npm i --no-save embedded-postgres && cd .. && node tools/dev-postgres.mjs
 # （跑完自动停服并删除临时数据目录；用完 cd server && npm prune 清掉临时依赖）
 
-# 5) 本地 <-> 线上数据搬迁（默认 dry-run，加 --apply 才写；目标非空还要 --force）
+# 5) 服务端权威结算回归（隔离端口起服务，测双方互补/冲突/过期/换局/频控/越权，30 项断言）
+node tools/test-match-settlement.mjs 4320
+
+# 6) 断线重连 + 日志回放回归（假 PeerJS + 假后端驱动真 net.js，12 项断言，免浏览器免联网）
+node tools/test-net-reconnect.mjs
+
+# 7) 本地 <-> 线上数据搬迁（默认 dry-run，加 --apply 才写；目标非空还要 --force）
 node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_URL"
 node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to sqlite --apply
 # dry-run 也不是完全只读：它会在目标库建表（CREATE TABLE IF NOT EXISTS，幂等）并写一行 meta.schema_version，
@@ -423,6 +479,8 @@ node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to s
 4. 起服务 curl 确认新模块能 200 返回；
 5. 人机与真人两条链路都手动点一遍；
 6. 改过 `server/store/**`（表结构/列/驱动）或任何写库的路由 → 必跑 `node tools/test-server-persistence.mjs`；动到 Postgres 一侧时，再用 `--url` 对真实 Postgres 跑一遍（只跑 SQLite 不算测过）。
+7. 改过 `js/net.js` 或房间/结算路由（`server/index.js` 的 `/api/rooms*`、`/api/match*`）→ 必跑 `node tools/test-net-reconnect.mjs` + `node tools/test-match-settlement.mjs <端口>`；动了某类消息的语义就要重新考虑它进不进日志（`net.js` 的 `CONTROL_TYPES`），否则重连回放会漏步或多步。
+8. 新增游戏时问一句：本局有没有「本地随机、且不同步给对面」的私有状态？有 → 标 `noReplay: true`（§6.1 约定 7）。
 
 ---
 
@@ -466,7 +524,15 @@ curl -c ck.txt -H 'Content-Type: application/json' \
 
 # ③ 存储实况（字段是 records，不是 game_records；users/records/sessions 是各表行数）
 curl -b ck.txt https://chenting.cc.cd/api/admin/storage
+
+# ④ 后端版本探针（2026-09-08 之后必加）：旧计分入口要 404，新结算入口要 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://chenting.cc.cd/api/play
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+     -H 'Content-Type: application/json' -d '{}' https://chenting.cc.cd/api/match/report
 ```
+
+> 2026-09-08 实测：`/api/play` → 404、`/api/match/report` 未登录 → 401、`/api/rooms/0001/peers` 无凭据 → 403。
+> **若 `/api/play` 还是 200，说明线上跑的是旧版后端**（多半是那次部署失败/没触发），此时症状是「能玩但不加分」。
 
 ### 13.4 数据搬迁与回拉
 
@@ -494,8 +560,8 @@ curl -b ck.txt https://chenting.cc.cd/api/admin/storage
 
 **稳定性（建议优先）**
 1. ~~数据持久化~~ **已做（2026-09-07）**：`server/store/` 双驱动（SQLite 默认 / Postgres 设 `DATABASE_URL` 即启用）+ 结构版本迁移 + `tools/migrate-storage.mjs` 搬迁 + 33 项回归断言（SQLite 33 项全绿；Postgres 分支 25 项已用本地真实 PostgreSQL 18.4 跑通）。线上 Postgres 已接好并完成数据搬迁（2026-09-07，§13）。剩余：多实例下的房间/在线状态共享（仍是单进程内存，Free 只有单实例所以暂不致命）。
-2. **看门狗/重连**：P2P 断线后的自动重连与状态恢复（当前断开只能重开房间）。
-3. **后端接收胜负上报做校验**：现在比分由前端上报 `/api/play`，存在作弊可能；若要更严谨，应改为由服务端（房主侧）权威结算。
+2. ~~看门狗/重连~~ **已做（2026-09-08）**：`js/net.js` 两级恢复（PeerJS 自愈 → 换 PeerID + `/seat` 换座位重新握手），30s 内退避 6 次，失败交给用户「重试/取消」；配合**本局消息日志 + 回放**，回合制游戏能恢复到断线前，2 款含本地随机私有状态的游戏（你画我猜、吹牛骰）标 `noReplay`，只恢复连接不作废对方体验。前端加 `#netOverlay` 遮罩显示进度。实测 `tools/test-net-reconnect.mjs` 12 项断言（含 5↔6 非对称日志收敛、room-gone 立即放弃）。**已知限制**：页面整页刷新不恢复（房间与 journal 都是内存态）；真实 NAT 穿透下的成功率未测，需要她俩实战反馈。
+3. ~~后端校验胜负上报~~ **已做（2026-09-08）**：删 `/api/play`，改 `POST /api/match/report` + `GET /api/match/:id`，**双方声明互补才结算**（win↔lose / draw↔draw），对手显示名取自库内资料，另加 8s 频控、90s 过期、换局作废、越权 403。实测 `tools/test-match-settlement.mjs` 30 项断言全绿。顺手补的安全洞：改密/关房/删房/登记 peerId 之前对任何人开放，现在要座位凭据。剩余可做：`matches` 落库，覆盖「结算瞬间其中一端掉线」的补结算（现在靠 10 分钟内存回执 + 前端 25s 轮询兜）。
 
 **功能**
 4. 更多游戏：斗地主 / 象棋 / 连连看 / 谁是卧底 / 剧本杀式解谜（本地已有 `3d-game-dev` 等 Godot 技能，若想做独立游戏可另起工程）。
@@ -504,7 +570,7 @@ curl -b ck.txt https://chenting.cc.cd/api/admin/storage
 7. 消息实时化：现在私聊是轮询，可升级 WebSocket（`ws` 依赖已在 node_modules 里）或 SSE。
 
 **工程质量**
-8. ~~补自动化测试~~ 已做一半：`tools/check-syntax.mjs`、`tools/test-ai-gomoku.mjs`、`tools/test-server-persistence.mjs`（2026-09-07，SQLite 33 项 / Postgres 25 项断言）。待补：其余 7 个游戏的对局终局测试、胜负纯函数的正反例断言。
+8. ~~补自动化测试~~ 已做一半：`tools/check-syntax.mjs`（24 文件）、`tools/test-ai-gomoku.mjs`、`tools/test-server-persistence.mjs`（SQLite 33 项 / Postgres 25 项）、`tools/test-match-settlement.mjs`（30 项）、`tools/test-net-reconnect.mjs`（12 项）——后两个是 2026-09-08 新增；`cd server && npm test` 跑 persistence，另有 `npm run test:match` / `npm run test:net`。待补：其余 7 个游戏的对局终局测试、胜负纯函数的正反例断言，以及**真两个浏览器对打的 e2e**（现有测试分别覆盖后端状态机与前端 Net，没串起来）。
 9. 拆分 `js/app.js`（32KB）与 `server/index.js`（24KB）——单文件已偏大，但拆分时务必保持 §11 坑 1/4 的约定。
 10. 清理 `index.html` 里的 `data-page-node-id` 噪音。
 11. 前端错误上报 / `try-catch` 兜底，避免一处报错导致整站白屏。

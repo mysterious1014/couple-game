@@ -1,7 +1,8 @@
 // 双人游戏站点后端
 // - 静态托管整个前端（与 API 同源，免 CORS）
 // - 账号注册 / 登录 / 登出（scrypt 哈希 + httpOnly Cookie 会话）
-// - 游玩记录上报与查询
+// - 账号注册 / 登录 / 登出、房间与座位、P2P 重连所需的 peerId 交换
+// - 对局权威结算（双方互相印证才计分）与战绩查询
 // - 管理员后台（默认账号 admin / 888888）
 const express = require('express');
 const http = require('http');
@@ -131,27 +132,11 @@ app.get('/api/me', (req, res) => {
 });
 
 // ---------- 路由：游玩记录 ----------
+// 记分不再由客户端单方面上报：旧的 POST /api/play 已删除，P2P 结算见下方 /api/match/report，
+// 人机模式沿用「不计分」的既有约定。
 app.get('/api/me/records', requireAuth, (req, res) => {
   const recs = data.records.filter((r) => r.userId === req.user.id).sort((a, b) => b.ts - a.ts);
   res.json(recs);
-});
-
-app.post('/api/play', requireAuth, (req, res) => {
-  const { gameId, gameName, opponent, result, opponentUsername } = req.body || {};
-  if (!gameId || !result) return res.status(400).json({ error: '缺少参数' });
-
-  const delta = result === 'win' ? 20 : result === 'lose' ? -15 : result === 'draw' ? 2 : 0;
-  req.user.score = (req.user.score || 1000) + delta;
-
-  const rec = {
-    id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    userId: req.user.id, username: req.user.username,
-    gameId, gameName: gameName || gameId, opponent: opponent || '', opponentUsername: opponentUsername || '', result, ts: Date.now(),
-    delta,
-  };
-  data.records.push(rec);
-  save();
-  res.json({ ok: true, score: req.user.score, delta });
 });
 
 // ---------- 路由：好友与在线状态 ----------
@@ -406,12 +391,27 @@ app.get('/api/leaderboard', (req, res) => {
 
 // ---------- 路由：房间 ----------
 // 内存房间表（重启丢失），房主必须保持心跳，掉线/退出后房间自动消失。
-// 结构：code -> { code, peerId, password, hostName, players, status, gameId, gameName,
-//                 createdAt, lastHeartbeat, public, hostUserId }
+// 结构：code -> { code, peerId, hostPeerId, guestPeerId, password, hostName, hostUserId,
+//                 guestName, guestUserId, hostSecret, guestSecret, players, status,
+//                 gameId, gameName, createdAt, lastHeartbeat, public,
+//                 matchRound, currentMatchId, lastSettledAt }
+// hostSecret / guestSecret 是建房、加入时下发的座位凭据：改房、登记新 peerId（重连用）、
+// 关房都要带上，避免任何人拿 4 位房间号就能踢人/劫持座位。
 const rooms = {};
 let nextRoomCode = 1;
 const ROOM_HEARTBEAT_MS = 90 * 1000;        // 房主 90 秒内心跳，否则视为离线删房
 const ROOM_GC_INTERVAL_MS = 30 * 1000;      // 每 30 秒扫描一次
+
+function newSecret() {
+  return crypto.randomBytes(12).toString('hex');
+}
+// 座位凭据校验：role 为 host / guest
+function checkSeat(room, role, secret) {
+  if (!room || !secret) return false;
+  if (role === 'host') return room.hostSecret === secret;
+  if (role === 'guest') return room.guestSecret === secret;
+  return false;
+}
 
 function allocateRoomCode() {
   for (let i = 0; i < 9999; i++) {
@@ -452,9 +452,11 @@ app.post('/api/rooms', (req, res) => {
   if (!code) return res.status(503).json({ error: '房间号已用完' });
   const now = Date.now();
   rooms[code] = {
-    code, peerId, password: '',
+    code, peerId, hostPeerId: peerId, guestPeerId: '', password: '',
     hostName: hostName || '',
     hostUserId: hostUser ? hostUser.id : null,
+    hostSecret: newSecret(), guestSecret: '',
+    guestName: '', guestUserId: null,
     public: !!hostUser,          // 登录用户房间才进入公开列表
     players: 1,
     status: 'waiting',
@@ -462,14 +464,15 @@ app.post('/api/rooms', (req, res) => {
     gameName: gameName || '',
     createdAt: now,
     lastHeartbeat: now,
+    matchRound: 0, currentMatchId: null, lastSettledAt: 0,
   };
-  res.json({ code, room: roomToPublic(rooms[code]) });
+  res.json({ code, secret: rooms[code].hostSecret, room: roomToPublic(rooms[code]) });
 });
 
 app.get('/api/rooms/:code', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  res.json({ code: room.code, peerId: room.peerId, hasPassword: !!room.password, hostName: room.hostName, status: room.status });
+  res.json({ code: room.code, peerId: room.hostPeerId || room.peerId, hasPassword: !!room.password, hostName: room.hostName, status: room.status });
 });
 
 app.post('/api/rooms/:code/join', (req, res) => {
@@ -478,14 +481,48 @@ app.post('/api/rooms/:code/join', (req, res) => {
   if (room.password && room.password !== (req.body.password || '')) {
     return res.status(403).json({ error: '密码错误' });
   }
+  const guest = currentUser(req);
+  room.guestSecret = newSecret();
+  room.guestUserId = guest ? guest.id : null;
+  room.guestName = guest ? (guest.nickname || guest.username) : String(req.body.name || '');
   room.players = Math.min((room.players || 1) + 1, 2);
-  res.json({ code: room.code, peerId: room.peerId, hostName: room.hostName, gameId: room.gameId, gameName: room.gameName });
+  res.json({
+    code: room.code, peerId: room.hostPeerId || room.peerId, secret: room.guestSecret,
+    hostName: room.hostName, gameId: room.gameId, gameName: room.gameName,
+  });
+});
+
+// 重连用：把自己当前的 peerId 登记回房间（页面不掉线、只断连接时 PeerID 会变）
+app.post('/api/rooms/:code/seat', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  const { role, peerId, secret } = req.body || {};
+  if (!peerId) return res.status(400).json({ error: '缺少 peerId' });
+  if (!checkSeat(room, role, secret)) return res.status(403).json({ error: '座位凭据不正确' });
+  if (role === 'host') { room.hostPeerId = peerId; room.peerId = peerId; }
+  else room.guestPeerId = peerId;
+  room.lastHeartbeat = Date.now();
+  res.json({ ok: true, hostPeerId: room.hostPeerId, guestPeerId: room.guestPeerId });
+});
+
+// 重连用：取对方的 peerId（同样要座位凭据，免得外人窥探/投毒）
+app.get('/api/rooms/:code/peers', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  const role = req.query.role === 'guest' ? 'guest' : 'host';
+  if (!checkSeat(room, role, req.query.secret)) return res.status(403).json({ error: '座位凭据不正确' });
+  res.json({
+    hostPeerId: room.hostPeerId || room.peerId,
+    guestPeerId: room.guestPeerId || '',
+    status: room.status, gameId: room.gameId || '',
+  });
 });
 
 app.patch('/api/rooms/:code', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  const { password, gameId, gameName, status, players } = req.body || {};
+  const { password, gameId, gameName, status, players, secret } = req.body || {};
+  if (!checkSeat(room, 'host', secret)) return res.status(403).json({ error: '座位凭据不正确' });
   if (typeof password === 'string') room.password = password;
   if (typeof gameId === 'string') room.gameId = gameId;
   if (typeof gameName === 'string') room.gameName = gameName;
@@ -504,11 +541,19 @@ app.post('/api/rooms/:code/heartbeat', (req, res) => {
 
 app.post('/api/rooms/:code/close', (req, res) => {
   // 页面关闭/刷新时的 beacon 清理接口（同 DELETE 语义，但兼容 sendBeacon POST）
+  const room = rooms[req.params.code];
+  if (room && !checkSeat(room, 'host', (req.body || {}).secret)) {
+    return res.status(403).json({ error: '座位凭据不正确' });
+  }
   delete rooms[req.params.code];
   res.json({ ok: true });
 });
 
 app.delete('/api/rooms/:code', (req, res) => {
+  const room = rooms[req.params.code];
+  if (room && !checkSeat(room, 'host', req.query.secret)) {
+    return res.status(403).json({ error: '座位凭据不正确' });
+  }
   delete rooms[req.params.code];
   res.json({ ok: true });
 });
@@ -530,6 +575,178 @@ setInterval(() => {
     if (now - rooms[code].createdAt > 24 * 60 * 60 * 1000) delete rooms[code];
   }
 }, 60 * 60 * 1000);
+
+// ---------- 路由：权威结算（Roadmap ③） ----------
+// 旧 POST /api/play 的问题：客户端一句 {"result":"win"} 就能给自己加 20 分。
+// 现在改成「双方互相印证」：两个参与者各自向服务端声明本局结果，只有两份声明互补
+// （我赢 <-> 你输，或者双方都报平局）服务端才真正改分、并给两人各写一条战绩；
+// 声明冲突就本局作废（谁都不扣分），客户端显示「结算未确认」。
+// 想单方面作弊必须让对方也点一次「我输了」，对情侣应用来说这个成本已经够高了。
+// 待结算对局与房间同级放内存：房间本来就随实例消失，落库的只有结算后的战绩。
+const SCORE_DELTA = { win: 20, lose: -15, draw: 2 };
+// 超时可用环境变量收紧（自动化测试要跑过期分支，不能真等 90 秒）
+const MATCH_PENDING_TTL_MS = Number(process.env.MATCH_PENDING_TTL_MS) || 90 * 1000;
+const MATCH_KEEP_MS = 10 * 60 * 1000;       // 结束的对局再留 10 分钟，供先上报的一方轮询结果
+const MATCH_SETTLE_GAP_MS = 8 * 1000;       // 同房间两次结算的最小间隔，挡脚本连点
+const matches = new Map();                  // matchId -> match
+
+function seatOf(room, uid) {
+  if (!room || !uid) return null;
+  if (room.hostUserId && room.hostUserId === uid) return 'host';
+  if (room.guestUserId && room.guestUserId === uid) return 'guest';
+  return null;
+}
+function otherSeatId(room, uid) {
+  const seat = seatOf(room, uid);
+  if (seat === 'host') return room.guestUserId || null;
+  if (seat === 'guest') return room.hostUserId || null;
+  return null;
+}
+function isComplementary(theirs, mine) {
+  if (theirs === 'draw' && mine === 'draw') return true;
+  return (theirs === 'win' && mine === 'lose') || (theirs === 'lose' && mine === 'win');
+}
+function matchView(match, uid) {
+  const mine = match.reports[uid];
+  const otherKey = Object.keys(match.reports).find((k) => k !== uid);
+  const settled = match.settled && match.settled[uid];
+  return {
+    id: match.id, roomId: match.roomCode, gameId: match.gameId, gameName: match.gameName,
+    round: match.round, status: match.status,
+    result: mine ? mine.result : null,
+    theirResult: otherKey ? match.reports[otherKey].result : null,
+    delta: settled ? settled.delta : 0,
+    score: settled ? settled.score : null,
+    createdAt: match.createdAt,
+    expiresAt: match.createdAt + MATCH_PENDING_TTL_MS,
+  };
+}
+// 双方声明互补后调用：改两人的分、写两人的战绩
+function settleMatch(match) {
+  const ids = Object.keys(match.reports);
+  const now = Date.now();
+  match.settled = {};
+  for (const uid of ids) {
+    const me = data.users.find((u) => u.id === uid);
+    const other = data.users.find((u) => u.id === ids.find((x) => x !== uid));
+    if (!me) continue;
+    const result = match.reports[uid].result;
+    const delta = SCORE_DELTA[result] || 0;
+    me.score = (me.score || 1000) + delta;
+    match.settled[uid] = { delta, score: me.score };
+    data.records.push({
+      id: 'r' + now.toString(36) + Math.random().toString(36).slice(2, 6),
+      userId: me.id, username: me.username,
+      gameId: match.gameId, gameName: match.gameName,
+      opponent: other ? (other.nickname || other.username) : '',
+      opponentUsername: other ? other.username : '',
+      result, ts: now, delta,
+      matchId: match.id, mode: 'p2p',
+    });
+  }
+  match.status = 'settled';
+  match.settledAt = now;
+  const room = rooms[match.roomCode];
+  if (room) {
+    room.currentMatchId = null;
+    room.lastSettledAt = now;
+    room.status = 'waiting';
+  }
+  save();
+}
+
+// 上报本局结果（每个参与者各调一次，服务端凑齐才结算）
+app.post('/api/match/report', requireAuth, (req, res) => {
+  const { roomCode, gameId, gameName, result, roundHint } = req.body || {};
+  if (!roomCode || !gameId) return res.status(400).json({ error: '缺少参数' });
+  if (!['win', 'lose', 'draw'].includes(result)) return res.status(400).json({ error: '结果不合法' });
+  const room = rooms[String(roomCode)];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  if (!seatOf(room, req.user.id)) return res.status(403).json({ error: '你不在这个房间里' });
+  const otherId = otherSeatId(room, req.user.id);
+  if (!otherId || otherId === req.user.id) {
+    return res.json({ status: 'unsupported', error: '需要双方都登录账号才会计分' });
+  }
+
+  const now = Date.now();
+  let match = room.currentMatchId ? matches.get(room.currentMatchId) : null;
+  if (match) {
+    if (match.status !== 'pending' || now - match.createdAt > MATCH_PENDING_TTL_MS) {
+      if (match.status === 'pending') match.status = 'expired';
+      room.currentMatchId = null;
+      match = null;
+    } else if (match.gameId !== gameId) {
+      match.status = 'superseded';          // 换游戏了，旧局不再等确认
+      room.currentMatchId = null;
+      match = null;
+    } else if (match.reports[req.user.id]) {
+      return res.json(matchView(match, req.user.id));   // 同一局重复上报 -> 幂等
+    } else if (typeof roundHint === 'number' && typeof match.roundHint === 'number'
+               && match.roundHint !== roundHint) {
+      match.status = 'superseded';          // 一方已经开下一局，旧局等不到了
+      room.currentMatchId = null;
+      match = null;
+    }
+  }
+  if (!match) {
+    room.matchRound = (room.matchRound || 0) + 1;
+    match = {
+      id: 'm' + now.toString(36) + Math.random().toString(36).slice(2, 7),
+      roomCode: room.code, gameId: String(gameId).slice(0, 24),
+      gameName: String(gameName || gameId).slice(0, 24),
+      round: room.matchRound,
+      roundHint: typeof roundHint === 'number' ? roundHint : null,
+      reports: {}, settled: null, status: 'pending', createdAt: now,
+    };
+    matches.set(match.id, match);
+    room.currentMatchId = match.id;
+  }
+
+  match.reports[req.user.id] = { result, ts: now };
+  const otherReport = match.reports[otherId];
+  if (!otherReport) return res.json({ ...matchView(match, req.user.id), status: 'pending' });
+
+  if (!isComplementary(otherReport.result, result)) {
+    match.status = 'conflict';
+    match.conflictAt = now;
+    room.currentMatchId = null;
+    return res.json({ ...matchView(match, req.user.id), status: 'conflict' });
+  }
+  if (room.lastSettledAt && now - room.lastSettledAt < MATCH_SETTLE_GAP_MS) {
+    match.status = 'throttled';
+    room.currentMatchId = null;
+    return res.json({ ...matchView(match, req.user.id), status: 'throttled', error: '结算过于频繁，本局不计分' });
+  }
+  settleMatch(match);
+  res.json({ ...matchView(match, req.user.id), status: 'settled' });
+});
+
+// 先上报的一方用它轮询最终结果
+app.get('/api/match/:id', requireAuth, (req, res) => {
+  const match = matches.get(req.params.id);
+  if (!match) return res.status(404).json({ error: '对局不存在或已清理' });
+  const room = rooms[match.roomCode];
+  if (!seatOf(room, req.user.id)) return res.status(403).json({ error: '无权查看该对局' });
+  if (match.status === 'pending' && Date.now() - match.createdAt > MATCH_PENDING_TTL_MS) {
+    match.status = 'expired';
+    if (room && room.currentMatchId === match.id) room.currentMatchId = null;
+  }
+  res.json(matchView(match, req.user.id));
+});
+
+// 清理已结束 / 超时的对局
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, match] of matches) {
+    if (match.status === 'pending' && now - match.createdAt > MATCH_PENDING_TTL_MS) {
+      match.status = 'expired';
+      const room = rooms[match.roomCode];
+      if (room && room.currentMatchId === id) room.currentMatchId = null;
+    }
+    const stamp = match.settledAt || match.conflictAt || match.createdAt;
+    if (match.status !== 'pending' && now - stamp > MATCH_KEEP_MS) matches.delete(id);
+  }
+}, ROOM_GC_INTERVAL_MS);
 
 // ---------- 路由：管理员 ----------
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
