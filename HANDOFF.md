@@ -531,7 +531,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
      -H 'Content-Type: application/json' -d '{}' https://chenting.cc.cd/api/match/report
 ```
 
-> 2026-09-08 实测：`/api/play` → 404、`/api/match/report` 未登录 → 401、`/api/rooms/0001/peers` 无凭据 → 403。
+> 2026-09-08 **本地**实测（`tools/test-match-settlement.mjs` 会真起一个隔离端口的服务）：`/api/play` → 404、`/api/match/report` 未登录 → 401、`/api/rooms/0001/peers` 无凭据 → 403。
+> ⚠️ 上面 ①–④ **线上尚未复验**：commit `dd7388f` 改了 `server/index.js`，按 §11 坑 7 会触发 Auto-Deploy，但本机当天直连 `https://chenting.cc.cd` 全程 TLS reset（见 §13.6），跑不了验收。下次开代理第一件事就是把这 4 条补上。
 > **若 `/api/play` 还是 200，说明线上跑的是旧版后端**（多半是那次部署失败/没触发），此时症状是「能玩但不加分」。
 
 ### 13.4 数据搬迁与回拉
@@ -554,6 +555,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 - `https://couple-game.onrender.com` 返回 `426 Upgrade Required`：**不是我们的服务**。未占用的 onrender 子域返回 404，被 Blueprint 关掉的子域也返回 404，说明这个名字被别人的服务占了；我们服务的子域名在后台 Overview 的「Show more URLs」里。
 - 2026-09-07 21:44 之前那几次 `Exited with status 1` 全部是同一个原因（原生模块 ABI 不匹配，§11 坑 10），不是欠费、不是 426、不是冷启动。
+- **2026-09-08：本机直连 `https://chenting.cc.cd` 全部 TLS `Connection was reset`（HTTPS 与明文 HTTP 都 reset，`dns.google` / `cloudflare-dns.com` 同时超时），但 `github.com` / `render.com` 正常。** 是本机网络/代理问题（系统代理 `127.0.0.1:7897` 的客户端没开），**不是站点挂了**——2026-09-07 同一条命令是能通的。判断站点死活要用「代理开着」的通道，或直接看 Render 后台的 Deploy 日志。
 
 ---
 ## 14. 后续优化建议（Roadmap）
