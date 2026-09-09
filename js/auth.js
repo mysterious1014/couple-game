@@ -1,5 +1,8 @@
 // 前端账号模块：登录 / 注册 / 登出 / 上报战绩。
 // 通过 Cookie 会话与同源后端通信，无需手动管理 token。
+// 「记住账号密码」的存取在 js/remember.js（本地混淆存储，不是加密，见该文件顶部说明）。
+
+import { Remember } from './remember.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,10 +28,11 @@ export const Auth = {
     return this.me;
   },
 
-  async login(username, password) {
+  // remember=true 时后端把会话 Cookie 拉长到 30 天（不勾也有默认 7 天）。
+  async login(username, password, remember = false) {
     const r = await fetch('/api/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember: !!remember }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '登录失败'); }
     this.me = await r.json();
@@ -37,10 +41,10 @@ export const Auth = {
     return this.me;
   },
 
-  async register(username, password, nickname) {
+  async register(username, password, nickname, remember = false) {
     const r = await fetch('/api/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, nickname }),
+      body: JSON.stringify({ username, password, nickname, remember: !!remember }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '注册失败'); }
     this.me = await r.json();
@@ -51,6 +55,14 @@ export const Auth = {
 
   async logout() {
     try { await fetch('/api/logout', { method: 'POST' }); } catch {}
+    // 主动退出 = 这台机器不再被信任：抹掉本机存过的密码，用户名留着方便下次回填
+    Remember.clear();
+    const box = $('rememberMe');
+    if (box) {
+      box.checked = false;
+      const wrap = box.closest('.remember'); if (wrap) wrap.classList.remove('on');
+    }
+    const passEl = $('loginPass'); if (passEl) passEl.value = '';   // 弹窗节点不销毁，别让旧密码留在框里
     this.me = null;
     this.renderAuthArea();
     this._notify();
@@ -110,8 +122,29 @@ export function openAuth(mode = 'login') {
     renderStrength('');                 // 重置强度提示
     const p2 = $('regPass2'); if (p2) p2.value = '';  // 清空确认框
   }
+  fillLoginFromRemember();          // 每次打开都按本机存过的凭据回填一次
   const toReg = $('toReg'); if (toReg) toReg.onclick = (e) => { e.preventDefault(); openAuth('register'); };
   const toLogin = $('toLogin'); if (toLogin) toLogin.onclick = (e) => { e.preventDefault(); openAuth('login'); };
+}
+
+// 用本机存过的凭据回填登录框：勾过「记住」就连密码一起填，否则只填用户名。
+// 已经打了字就不覆盖，免得把她正在输入的内容冲掉。
+function fillLoginFromRemember() {
+  const user = $('loginUser');
+  if (!user) return;
+  const pass = $('loginPass');
+  const box = $('rememberMe');
+  const wrap = box && box.closest('.remember');
+  const saved = Remember.load();
+  if (saved) {
+    if (!user.value) user.value = saved.username;
+    if (pass && !pass.value) pass.value = saved.password;
+    if (box) { box.checked = true; if (wrap) wrap.classList.add('on'); }
+  } else {
+    const name = Remember.loadUsername();
+    if (name && !user.value) user.value = name;
+    if (box) { box.checked = false; if (wrap) wrap.classList.remove('on'); }
+  }
 }
 
 function toggleEye(btn) {
@@ -156,9 +189,21 @@ function escapeHtml(s) {
   $('authClose').onclick = () => { modal.hidden = true; };
   document.querySelectorAll('.eye').forEach((b) => { b.onclick = () => toggleEye(b); });
 
-  // 记住用户名：回填上次登录账号
-  const savedName = localStorage.getItem('cg_username');
-  if (savedName) $('loginUser').value = savedName;
+  // 回填上次登录的账号（勾过「记住账号密码」就连密码一起填）
+  fillLoginFromRemember();
+
+  // 取消勾选 = 当场抹掉本机存过的密码，不让它悄悄留着
+  const rememberBox = $('rememberMe');
+  if (rememberBox) {
+    rememberBox.addEventListener('change', () => {
+      const wrap = rememberBox.closest('.remember');
+      if (wrap) wrap.classList.toggle('on', rememberBox.checked);
+      if (!rememberBox.checked) {
+        Remember.clear();
+        const pass = $('loginPass'); if (pass) pass.value = '';
+      }
+    });
+  }
 
   // 注册时实时显示密码强度
   const regPass = $('regPass');
@@ -167,10 +212,13 @@ function escapeHtml(s) {
   $('loginSubmit').onclick = async () => {
     const u = $('loginUser').value.trim();
     const p = $('loginPass').value;
+    const box = $('rememberMe');
+    const remember = !!(box && box.checked);
     $('loginErr').textContent = '';
     try {
-      await Auth.login(u, p);
-      localStorage.setItem('cg_username', u);  // 记住用户名
+      await Auth.login(u, p, remember);
+      Remember.saveUsername(u);                       // 用户名一直记住（沿用旧行为）
+      if (remember) Remember.save(u, p); else Remember.clear();
       modal.hidden = true;
     }
     catch (e) { $('loginErr').textContent = e.message; }

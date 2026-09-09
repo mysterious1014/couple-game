@@ -67,11 +67,17 @@ class Client {
     if (set.length) this.cookie = set.map((c) => c.split(';')[0]).join('; ');
     let body = null;
     try { body = await res.json(); } catch { body = null; }
-    return { status: res.status, body };
+    return { status: res.status, body, setCookie: set };
   }
   post(pathname, payload) {
     return this.call(pathname, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   }
+}
+
+// Set-Cookie 里的 Max-Age（秒）；没有就返回 null
+function maxAgeOf(cookieStr) {
+  const m = /Max-Age=(\d+)/i.exec(cookieStr);
+  return m ? Number(m[1]) : null;
 }
 
 // 两个已登录客户端之间完成一次「双方互相印证」的结算（服务端权威记分，见 /api/match/report）。
@@ -190,6 +196,29 @@ failures += check('战绩记录持久化', () => {
 });
 const me = await a2.call('/api/me');
 failures += check('积分持久化（1020）', () => assert.strictEqual(me.body.score, 1020));
+
+// 「记住账号密码」的会话时长：勾了 remember 给 30 天，不勾维持原来的 7 天
+const plainLogin = await new Client().post('/api/login', { username: 'persist_a', password: 'pw123456' });
+failures += check('默认登录：会话 Cookie 仍是 7 天且 HttpOnly', () => {
+  const c = plainLogin.setCookie.join(' ');
+  assert.match(c, /sid=/);
+  assert.ok(/HttpOnly/i.test(c), '缺 HttpOnly: ' + c);
+  assert.strictEqual(maxAgeOf(c), 7 * 24 * 3600);
+});
+const rememberLogin = await new Client().post('/api/login', { username: 'persist_a', password: 'pw123456', remember: true });
+failures += check('remember=true：会话 Cookie 拉长到 30 天', () => {
+  assert.strictEqual(rememberLogin.status, 200);
+  assert.strictEqual(maxAgeOf(rememberLogin.setCookie.join(' ')), 30 * 24 * 3600);
+});
+const rememberReg = await new Client().post('/api/register', { username: 'remember_me_user', password: 'pw123456', remember: true });
+failures += check('注册也认 remember', () => {
+  assert.strictEqual(rememberReg.status, 200);
+  assert.strictEqual(maxAgeOf(rememberReg.setCookie.join(' ')), 30 * 24 * 3600);
+});
+const plainReg = await new Client().post('/api/register', { username: 'remember_plain_user', password: 'pw123456' });
+failures += check('注册不勾时保持 7 天（没被顺手改默认值）', () => {
+  assert.strictEqual(maxAgeOf(plainReg.setCookie.join(' ')), 7 * 24 * 3600);
+});
 
 const b2 = new Client();
 await b2.post('/api/login', { username: 'persist_b', password: 'pw123456' });

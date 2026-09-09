@@ -7,6 +7,7 @@
 - 战绩与成就系统
 - 断线自动重连：掉线后自动重新握手并按消息日志恢复到断线前的局面，不用重开房间
 - 战绩由服务端结算：一局要双方都上报且结果互相印证才计分
+- 登录页「记住账号密码」：勾上后本机自动回填、会话延长到 30 天；取消勾选或退出即清除。只存这台设备的这个浏览器，与 IP 无关，公用电脑别勾
 
 > 默认管理员账号：`admin` / `888888`，部署后请尽快修改或限制访问。
 
@@ -28,6 +29,7 @@ node tools/test-ai-gomoku.mjs            # 五子棋 AI 三档难度跑完整对
 node tools/test-server-persistence.mjs   # 存储层回归：写数据 -> 重启进程 -> 读回
 node tools/test-match-settlement.mjs     # 服务端结算回归：双方互补才计分 + 冲突/过期/频控/越权
 node tools/test-net-reconnect.mjs        # 断线重连回归：假 PeerJS 驱动真 net.js，验证重连握手与日志回放
+node tools/test-remember.mjs             # 「记住账号密码」回归：本机存取的编解码、降级与清理
 node tools/dev-postgres.mjs              # 可选：本地拉起真 Postgres 跑同一套回归（需先 npm i --no-save embedded-postgres）
 ```
 

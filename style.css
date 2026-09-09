@@ -391,6 +391,22 @@ button.ghost.solo:hover { background: rgba(255, 126, 179, 0.16); }
 .switch { text-align: center; font-size: 13px; color: var(--muted); margin: 14px 0 0; }
 .switch a { color: var(--accent); font-weight: 600; text-decoration: none; }
 
+/* 记住账号密码（复选框要显式抵消全局 input 的 width/padding） */
+.remember {
+  display: flex; align-items: center; gap: 8px;
+  margin: -4px 0 0; font-size: 13px; color: var(--muted);
+  cursor: pointer; user-select: none; line-height: 1.4;
+}
+.remember:hover { color: var(--text); }
+.remember input[type="checkbox"] {
+  appearance: auto; -webkit-appearance: checkbox;
+  flex: 0 0 auto; width: 16px; height: 16px; min-width: 16px;
+  margin: 0; padding: 0; border: none; background: transparent;
+  border-radius: 0; box-shadow: none;
+  accent-color: var(--accent); cursor: pointer;
+}
+.remember.on { color: var(--accent-2); }
+
 /* 密码框小眼睛 */
 .pwd-wrap {
   position: relative; display: flex; align-items: center;

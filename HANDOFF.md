@@ -81,6 +81,7 @@ couple-game/
 │   ├── net.js              # ★ 通信层 Net 类（PeerJS 封装）：host/join/send/on + 断线重连与消息日志回放
 │   ├── ai.js               # ★ AI：AINet 类（与 Net 同接口）+ 8 个游戏大脑 + createBrain
 │   ├── auth.js             # 登录/注册/登出、Auth.me 状态、结算后刷新本地分数 applyScore
+│   ├── remember.js         # 「记住账号密码」本机存取：XOR+base64 混淆、storage 可注入（§5.5）
 │   ├── views.js            # 「我的战绩」「管理后台」「排行榜」视图渲染 + tierOf 段位
 │   ├── friends.js          # 好友页：三标签（好友/请求/黑名单）、私聊、邀请
 │   ├── achievements.js     # 依据战绩实时计算统计与 10 个成就徽章（纯前端）
@@ -154,7 +155,7 @@ couple-game/
 
 ### 5.3 后端
 Express 单文件，顺序即大致职责：静态托管 → 屏蔽 `/server` 源码 → 鉴权 → 健康检查 → 房间 → 好友 → CP → 消息 → 排行榜 → 后台。
-会话：httpOnly Cookie + `sessions` 表（重启不再掉登录态）；密码：Node `crypto.scrypt` 加盐哈希。
+会话：httpOnly Cookie + `sessions` 表（重启不再掉登录态），默认 **7 天**、登录时带 `remember: true` 则 **30 天**（§5.5）；密码：Node `crypto.scrypt` 加盐哈希。
 
 **存储层契约（改动前必读）**
 - `index.js` 只认 `{ data, save, ready, stats }`：`data` 是 6 个内存集合，路由照旧 push/filter/改字段，`save()` 负责落库。
@@ -189,6 +190,31 @@ Express 单文件，顺序即大致职责：静态托管 → 屏蔽 `/server` �
 - 可测性：`MATCH_PENDING_TTL_MS` 支持环境变量覆盖（回归测试用 1500ms 跑过期分支，不真等 90s）。
 
 > 说人话：想给自己加分，必须让对方点一次「我输了」。对情侣应用这个成本足够高了；真正的收益是**误报不再算数**——刷新页面、脚本连点、双开客户端都刷不出分。
+
+### 5.5 「记住账号密码」= 本机混淆存储 + 会话时长（2026-09-08）
+
+先纠正一个常见误解：**这个功能和 IP 无关**。它记的是「这台设备的这个浏览器」。换浏览器、换设备、
+清理浏览器数据后就得重新输密码；连同一个 Wi-Fi 的另一台设备也不会被记住。想跨设备保持登录，靠的是
+服务端会话 Cookie，不是本地存的这份凭据。
+
+三条互相独立的机制，别混为一谈：
+
+| 机制 | 存在哪 | 活多久 | 没有它会怎样 |
+|---|---|---|---|
+| 会话 Cookie `sid` | 服务端 `sessions` 表 + 浏览器 httpOnly Cookie | 默认 **7 天**；带 `remember` → **30 天**（`server/index.js` 的 `sessionOpts()`） | 每次进网站都要重新登录 |
+| 用户名回填 | 本机 `localStorage['cg_username']` | 直到手动清除浏览器数据 | 下次要自己打用户名（**改动前就有**，不是本轮新增） |
+| 密码回填 | 本机 `localStorage['cg_auth_remember']` | 直到取消勾选 / 点退出 | 下次要重新打一次密码（本轮新增） |
+
+- 代码：`js/remember.js`（纯逻辑、不碰 DOM、storage 可注入以便 Node 单测）+ `js/auth.js` 的
+  `fillLoginFromRemember()`（模块加载和每次打开弹窗各调一次）/ `loginSubmit` / `logout()`。
+- **⚠️ 存的是 XOR + base64 混淆，不是加密**：密钥 `cg-remember-v1` 就写死在 `js/remember.js` 里，
+  任何能在页面执行脚本的人（XSS、浏览器扩展、DevTools）都能还原。**公用电脑、别人的手机上不要勾**。
+  真要「打开就是登录态且不留密码」，用第一行的持久会话 Cookie 就够了。
+- 取消勾选 = **当场** `Remember.clear()` 并清空密码框；点「退出」同样清密码（用户名保留）。
+  两条都是即时生效，不会悄悄留着。
+- 数据坏了 / `v` 版本对不上 → `load()` 返回 `null` 并顺手 `clear()`，登录框不会炸。
+- 注册弹窗**没有**这个勾（`#rememberMe` 只在 `#loginForm` 内），注册走默认 7 天会话。
+
 
 ---
 
@@ -242,8 +268,8 @@ export default {
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| POST | `/api/register` | – | 注册（用户名 3–20 位，密码 ≥6 位），新用户默认 1000 分 |
-| POST | `/api/login` | – | 登录，返回用户信息 + Set-Cookie 会话 |
+| POST | `/api/register` | – | 注册（用户名 3–20 位，密码 ≥6 位），新用户默认 1000 分；body 可选 `remember`（§5.5） |
+| POST | `/api/login` | – | 登录，返回用户信息 + Set-Cookie 会话；body 可选 `remember: true` 把会话从 7 天延长到 30 天（§5.5） |
 | POST | `/api/logout` | – | 登出，清会话与在线状态 |
 | GET | `/api/me` | – | 当前登录用户（含 `score`、`cpPartner`） |
 | GET | `/api/me/records` | ✔ | 我的对局记录（含 `opponentUsername`、`delta`） |
@@ -334,6 +360,7 @@ export default {
 ## 10. 已完成功能清单
 
 - [x] 账号体系：注册 / 登录 / 登出 / 记住用户名 / 密码强度提示 / 确认密码 / scrypt 哈希 / httpOnly Cookie
+- [x] **记住账号密码（仅本机）**：勾上后凭据留在本机、会话延长到 30 天，重开网站自动回填；取消勾选或点退出即清除（§5.5）
 - [x] 房间：4 位房间号、房间密码、拷贝房号、公开房间列表（6s 轮询）、房主设置面板
 - [x] 对战：真人 P2P + **人机（8 款游戏 × 3 档难度）**、房间内「邀请电脑玩家」
 - [x] 游戏：五子棋、你画我猜、黑白棋、点格棋、记忆翻牌、海龟汤、吹牛、UNO
@@ -432,6 +459,12 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 **15. `noReplay` 游戏的重连语义 = 连接恢复、本局作废**
 你画我猜（随机密词）、吹牛骰（本地随机骰子）标了 `noReplay: true`：重连后 `js/app.js` 的 `onRebuild` 把玩家送回房间页，而不是恢复到半局。别为了「体验更好」去掉标记——那会重建出一个错误的私有状态，比回房间更糟。
 
+**16. 「记住账号密码」的四个必守点（2026-09-08）**
+- `localStorage` 在**隐私模式 / 禁用站点数据**时访问会**抛异常**（不是返回 `null`）。`js/remember.js` 的 `resolveStorage()` 先 try 探测再退回内存实现 `memoryStore()`，**别简化成直接读写 `window.localStorage`** —— Safari 隐私模式下整个登录框会连带炸掉。
+- 全站有 `input { width: 100%; padding: 13px 15px }`，往里加 `type=checkbox` 必须显式写回 `appearance: auto; width/height: 16px; padding: 0; border: none; box-shadow: none`（见 `style.css` 的 `.remember input[type=checkbox]`），否则复选框会被撑成一条大色块。
+- **弹窗节点不销毁**（`#authModal` 只切 `hidden`），所以「清掉已存密码」必须同时清 `#loginPass.value`，否则退出后重开弹窗旧密码还留在框里（本轮实测补上）。
+- 浏览器自带的密码管理器（Chrome/Edge「保存密码」）是**另一条独立链路**，不受本功能控制。自动化测试里出现过「我们没存密码，但浏览器自动回填导致登录成功」，别把它当本功能的功劳，也别当它的 bug。
+
 ## 12. 开发与验证工作流
 
 无浏览器也能验证绝大部分逻辑，这是本项目惯用的做法：
@@ -465,6 +498,9 @@ node tools/migrate-storage.mjs --from sqlite --to postgres --to-url "$DATABASE_U
 node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to sqlite --apply
 # dry-run 也不是完全只读：它会在目标库建表（CREATE TABLE IF NOT EXISTS，幂等）并写一行 meta.schema_version，
 # 但六张业务表一行都不写；meta 不会被搬走（json_imported_at 是源库自己的导入标记），目标库自己初始化自己的 meta。
+
+# 8) 「记住账号密码」纯逻辑回归（注入假 storage，29 项断言，免浏览器免联网）
+node tools/test-remember.mjs
 ```
 
 > ⚠️ **不要直接对前端文件用 `node --check`**：`js/` 是 ES Modules 且仓库根目录没有 `package.json`，Node 会按 CommonJS 解析，17 个前端文件会全部误报 `Cannot use import statement outside a module`。`tools/check-syntax.mjs` 的做法是把前端 `.js` 复制为临时 `.mjs` 再检查，检查完自动清理。
@@ -482,6 +518,7 @@ node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to s
 6. 改过 `server/store/**`（表结构/列/驱动）或任何写库的路由 → 必跑 `node tools/test-server-persistence.mjs`；动到 Postgres 一侧时，再用 `--url` 对真实 Postgres 跑一遍（只跑 SQLite 不算测过）。
 7. 改过 `js/net.js` 或房间/结算路由（`server/index.js` 的 `/api/rooms*`、`/api/match*`）→ 必跑 `node tools/test-net-reconnect.mjs` + `node tools/test-match-settlement.mjs <端口>`；动了某类消息的语义就要重新考虑它进不进日志（`net.js` 的 `CONTROL_TYPES`），否则重连回放会漏步或多步。
 8. 新增游戏时问一句：本局有没有「本地随机、且不同步给对面」的私有状态？有 → 标 `noReplay: true`（§6.1 约定 7）。
+9. 改过 `js/remember.js` 或 `js/auth.js` 的回填/清理链路 → 必跑 `node tools/test-remember.mjs`，再手点「勾选登录 → 重开网站 → 取消勾选 → 退出」四条路径。⚠️ 浏览器自动化**读不到** `input[type=password].value`（会被脱敏成空串），要验证密码是否真被回填，用「什么都不改直接点登录，看能不能登进去」当判据（§11.16）。
 
 ---
 

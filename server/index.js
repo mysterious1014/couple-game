@@ -59,7 +59,14 @@ function requireAdmin(req, res, next) {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
   next();
 }
-const SESSION_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 3600 * 1000 };
+// 会话时长：默认 7 天（改前就是 7 天，不缩短既有行为）；登录时勾了「记住账号密码」给 30 天。
+// 注意这只决定 Cookie 活多久，服务端 sessions 表里那条记录不过期（已知问题，见 HANDOFF 待办）。
+const SESSION_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+const REMEMBER_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+function sessionOpts(body) {
+  const remember = !!(body && body.remember);
+  return { httpOnly: true, sameSite: 'lax', maxAge: remember ? REMEMBER_MAX_AGE_MS : SESSION_MAX_AGE_MS };
+}
 
 // ---------- 健康检查与存储状态 ----------
 // /api/health 公开（Render 健康检查、部署后确认用的是哪个存储），不含任何业务数据
@@ -88,7 +95,7 @@ app.post('/api/register', (req, res) => {
   const token = newToken();
   data.sessions[token] = id;
   save();
-  res.cookie('sid', token, SESSION_OPTS).json({ id, username, nickname: nickname || username, role: 'user', score: 1000 });
+  res.cookie('sid', token, sessionOpts(req.body)).json({ id, username, nickname: nickname || username, role: 'user', score: 1000 });
 });
 
 app.post('/api/login', (req, res) => {
@@ -99,7 +106,7 @@ app.post('/api/login', (req, res) => {
   data.sessions[token] = u.id;
   u.lastLogin = Date.now();
   save();
-  res.cookie('sid', token, SESSION_OPTS).json({ id: u.id, username: u.username, nickname: u.nickname, role: u.role });
+  res.cookie('sid', token, sessionOpts(req.body)).json({ id: u.id, username: u.username, nickname: u.nickname, role: u.role });
 });
 
 app.post('/api/logout', (req, res) => {
