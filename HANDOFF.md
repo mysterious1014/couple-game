@@ -354,6 +354,11 @@ export default {
 - 注意：**背景是深色、文字是浅色**。新增区域不要写死亮色背景 + 深色文字，会破坏一致性。
 - `#decoBg` 是固定装饰层（`z-index:0`），含 9 个内联 SVG 萌系图形，低透明度 + 浮动动画；`#app` / `.topbar` 用 `position:relative;z-index:1` 盖在其上。**刻意不画具体三丽鸥角色以免侵权**，请勿添加具体 IP 形象。
 - 响应式三档：`≥1024px` 桌面（聊天栏常驻时 `body.chat-open` 右留 320px）、`≤600px` 手机、`≤360px` 超窄屏。
+- **五子棋棋盘尺寸（2026-09-09）**：`.go-board` 不再是固定 `max-width`，而是
+  `width: min(100%, max(var(--go-min), calc(100svh - var(--go-reserve))))`，即**同时受容器宽与视口高约束取小者**。
+  单元格是 `aspect-ratio:1/1` ⇒ 板宽=板高，只按宽度设上限必然浪费高度，所以矮视口会被高度卡住（`1024×768` 上限就是 600px，物理极限）。
+  `--go-min`（地板）= 改动前的旧上限（基线 410 / `≥1024` 档 600），**保证任何尺寸都不会比原来更小**；富余时才放大：
+  `1024×1366` 600→992、`1366×1024` 600→792、`1920×1080` 600→848。`--go-reserve` 是实测的上下固定开销（基线 320 / `≥1024` 232 / `≤600` 300）。
 
 ---
 
@@ -372,6 +377,7 @@ export default {
 - [x] 音效系统（Web Audio 合成，无音频文件）+ 顶栏静音开关
 - [x] 管理后台：用户列表、全部记录、删除用户
 - [x] 响应式（手机 / 平板 / 桌面）+ 粉色萌系主题
+- [x] **五子棋棋盘自适应放大**：按「视口高 − 固定开销」动态取尺寸，平板/桌面最高 992px；`≥1024` 档把状态行与「重新开始」并排到棋盘上方省出高度（§9）
 - [x] 房间残留治理：心跳 + 90s 自动清理 + `sendBeacon` 关房 + 游客不进公开列表
 - [x] **已上线**：Render Blueprint + Free Postgres 双驱动，`https://chenting.cc.cd`（2026-09-07，详见 §13）
 
@@ -464,6 +470,18 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 全站有 `input { width: 100%; padding: 13px 15px }`，往里加 `type=checkbox` 必须显式写回 `appearance: auto; width/height: 16px; padding: 0; border: none; box-shadow: none`（见 `style.css` 的 `.remember input[type=checkbox]`），否则复选框会被撑成一条大色块。
 - **弹窗节点不销毁**（`#authModal` 只切 `hidden`），所以「清掉已存密码」必须同时清 `#loginPass.value`，否则退出后重开弹窗旧密码还留在框里（本轮实测补上）。
 - 浏览器自带的密码管理器（Chrome/Edge「保存密码」）是**另一条独立链路**，不受本功能控制。自动化测试里出现过「我们没存密码，但浏览器自动回填导致登录成功」，别把它当本功能的功劳，也别当它的 bug。
+
+**17. 五子棋棋盘放大依赖 `:has()` 与 `svh`，别改回固定 `max-width`（2026-09-09）**
+- 放宽 `#app` / `.topbar` 的条件写成 `body:has(#game:not([hidden]) #go-board)`，**必须带 `#game:not([hidden])`**：
+  `mount()` 只在开新局时覆盖 `#gameRoot.innerHTML`，返回房间后 `#go-board` 仍以 0 尺寸留在 DOM 里，
+  只写 `body:has(#go-board)` 会让大厅/房间页在桌面档被撑宽（实测 `#app` 880→1180 的回归）。
+- 用 `100svh` 而不是 `100dvh`：手机地址栏收放会让 `dvh` 变大 → 棋盘变大 → 出现滚动条 → 再变大，形成正反馈抖动；`svh` 保证永不溢出且零布局跳动。
+- `--go-min` 是「不许比改动前更小」的地板，改它会直接造成小屏回归；`--go-reserve` 必须与实测固定开销一致，调 `body` 内边距 / `.game-top` / 顶栏高度后要重新量。
+- `≥1024` 档用 `#gameRoot` 的 `grid-template-areas: "status restart" "board board"` 把状态行与按钮压成一行，别改成 flex，否则 `#go-restart` 的 `margin-top` 会重新占高。
+- 无头环境（仓库根没有 `node_modules`，也没装 Playwright）验不了响应式，用 Codex 内置浏览器的 `viewport` capability 逐档量 `getBoundingClientRect()` + `scrollWidth>clientWidth`。
+- ⚠️ 顺带发现（**未修，与本次改动无关**）：黑白棋在窄屏（≤600px）会横向溢出 —— `.rev-board` 是 `repeat(8,1fr)` 但末两列 `.rev-cell` 实测超出容器约 100px（`scrollWidth` 453 vs `clientWidth` 375）。本次 diff 未触碰任何 `.rev-*` 规则。
+
+---
 
 ## 12. 开发与验证工作流
 

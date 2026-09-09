@@ -66,6 +66,10 @@ body {
 }
 
 #app { width: 100%; max-width: 470px; margin: 0 auto; }
+/* 五子棋屏：15x15 需要更大画布，放宽容器；棋盘本身按视口高度收敛，不会溢出。
+   条件限定「游戏屏可见且当前是五子棋」，避免返回房间后 #go-board 残留把别的页面撑宽。 */
+body:has(#game:not([hidden]) #go-board) #app,
+body:has(#game:not([hidden]) #go-board) .topbar { max-width: 100%; }
 
 h1 { text-align: center; font-size: 26px; margin: 6px 0 22px; color: var(--accent); letter-spacing: 2px; }
 
@@ -218,14 +222,20 @@ button.ghost.solo:hover { background: rgba(255, 126, 179, 0.16); }
 }
 
 /* 五子棋 */
+/* 棋盘是正方形（.go-cell 用 aspect-ratio），板宽 = 板高，所以必须同时受
+   「容器宽」与「视口高 - 上下固定开销」两个约束，取小者才能尽量吃满屏幕。
+   --go-min 沿用改动前的固定上限当地板，保证任何尺寸下都不会比原来更小。 */
 .go-board {
+  --go-reserve: 320px;
+  --go-min: 410px;
   display: grid;
   grid-template-columns: repeat(15, 1fr);
   gap: 0;
   background: linear-gradient(160deg, #ffe6f1, #ffd2e6);
   padding: 8px;
   border-radius: 16px;
-  max-width: 410px;
+  width: min(100%, max(var(--go-min), calc(100vh - var(--go-reserve))));
+  width: min(100%, max(var(--go-min), calc(100svh - var(--go-reserve))));
   margin: 0 auto;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4), var(--shadow);
 }
@@ -610,8 +620,22 @@ button.ghost.solo:hover { background: rgba(255, 126, 179, 0.16); }
   #room:not([hidden]) #leaveRoomBtn { grid-column: 1 / -1; }
   #room:not([hidden]) .add-ai, #room:not([hidden]) .remove-ai { width: 100%; }
 
-  /* 游戏区更宽 */
-  .go-board { max-width: 600px; }
+  /* 游戏区更宽：五子棋屏把 #app 和顶栏一起放宽，否则顶栏会比棋盘窄一截 */
+  body:has(#game:not([hidden]) #go-board) #app,
+  body:has(#game:not([hidden]) #go-board) .topbar { max-width: min(1180px, 100%); }
+  /* 桌面档：状态行与「重新开始」并排到棋盘上方，省出 ~65px 高度给棋盘 */
+  body:has(#game:not([hidden]) #go-board) #gameRoot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "status restart" "board board";
+    align-items: center;
+  }
+  #gameRoot #go-status { grid-area: status; margin-bottom: 0; text-align: left; }
+  #gameRoot #go-restart { grid-area: restart; justify-self: end; margin-top: 0; }
+  #gameRoot .go-board { grid-area: board; margin-top: 10px; }
+  .go-board { --go-min: 600px; --go-reserve: 232px; }
+  /* 对局中聊天入口是右下角浮标，不必再留 100px 底部空白挡「重新开始」 */
+  body:has(#game:not([hidden]) #go-board) { padding-bottom: 40px; }
   #dw-canvasWrap { max-width: 640px; margin: 0 auto; }
 
   /* 悄悄话 → 右侧常驻全高聊天栏 */
@@ -650,7 +674,7 @@ button.ghost.solo:hover { background: rgba(255, 126, 179, 0.16); }
   .rs-pwd button { width: 100%; }
 
   /* 五子棋棋盘：去掉固定宽度，随容器缩放（单元格本就 1fr 自适应） */
-  .go-board { max-width: 100%; padding: 4px; }
+  .go-board { padding: 4px; --go-reserve: 300px; }
 
   /* 你画我猜工具按钮略缩小 */
   .dw-tools { gap: 6px; }
