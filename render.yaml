@@ -4,8 +4,9 @@
 #   仓库 https://github.com/mysterious1014/couple-game  →  本 Blueprint(exs-dadbs6v10e5c73e86sug)
 #   → Web 服务 couple-game（Free / Node / Auto-Deploy: On Commit）→ https://chenting.cc.cd
 #     ⚠️ 因为 rootDir=server，**只有 server/** 的改动会被自动部署**；只改仓库根的
-#        文档 / render.yaml / tools/** 时，必须去后台点「Manual Deploy → Deploy latest commit」
-#        （2026-09-07 实测：fc7c452 全是根目录改动，一次部署都没触发）。详见 HANDOFF §11 坑 7。
+#        文档 / render.yaml / tools/** 时，跑一条命令补上：
+#          node tools/render-deploy.mjs        # Deploy Hook 触发 + 轮询校验线上 == HEAD
+#        （2026-09-07 实测：fc7c452 全是根目录改动，一次部署都没触发）。详见 HANDOFF §11 坑 7、§13.7。
 #   数据在手工建的 Postgres couple-game-db 里，连接串以 Secret 形式存在服务的 Env Variables：
 #     DATABASE_URL = postgresql://couple_game_db_user:***@dpg-dafbdolbedkc738hrol0-a/couple_game_db  (内网)
 #     PGSSLMODE    = require   ← 连接串里没有 sslmode，代码默认 disable，不加会被拒

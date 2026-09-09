@@ -51,7 +51,7 @@ npm start            # 等价于 node index.js
 | 通信 | PeerJS（WebRTC 点对点） | 服务端同时运行自建 PeerJS 信令服务 |
 | 后端 | Node.js（≥20）+ Express 4 | 单文件 `server/index.js`，同时托管静态资源与 `/api` |
 | 存储 | **双驱动**：SQLite（默认）/ Postgres（设了 `DATABASE_URL` 就启用） | 驱动层在 `server/store/`，`index.js` 只看到 `{ data, save, ready, stats }` |
-| 部署 | Render（Blueprint，`render.yaml`） | Free 计划 + Manual Deploy；要真正不丢数据就挂 Postgres |
+| 部署 | Render（Blueprint，`render.yaml`） | Free 计划 + Deploy Hook（`tools/render-deploy.mjs`，见 §13.7）；数据在 Postgres |
 
 **后端依赖只有四个**（`server/package.json`）：
 ```json
@@ -423,13 +423,13 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 线上 Auto-Deploy = **On Commit**，但服务的 **Root Directory = `server`**。Render 后台原文：「If set … code changes **outside of this directory do not trigger an auto-deploy**」。本轮实测对照：
 - `4885921` 只改 `server/package.json`、`server/package-lock.json`、`server/store/index.js` → 在 `server/` 内 → **Auto-Deploy 正常触发**。
 - `fc7c452` 只改 `HANDOFF.md`、`README.md`、`render.yaml` → 全在 `server/` 外 → **一次部署都没产生，连失败记录都没有**。当时误判成「webhook 漏投递 / Auto Sync 挂了」，白查很久。
-- 结论：**根目录改动不会「触发」部署，但会随任意一次部署的整仓快照一起上线**（服务把仓库根整体静态托管，见坑 12）。所以纯文档 / `tools/**` 改完之后想上线，两条路：等下一次 `server/**` 改动顺带带上去，或自己去后台点 **「Manual Deploy → Deploy latest commit」**（只部署最新 commit，不动任何配置，安全；另一项「Clear build cache & deploy」见坑 10）。
+- 结论：**根目录改动不会「触发」部署，但会随任意一次部署的整仓快照一起上线**（服务把仓库根整体静态托管，见坑 12）。所以纯文档 / `tools/**` 改完之后想上线，跑一条命令就行：`node tools/render-deploy.mjs`（Deploy Hook，2026-09-09 起的标准做法，详见 §13.7）。后台点「Manual Deploy → Deploy latest commit」是它的等价手动版；另一项「Clear build cache & deploy」见坑 10。
 - 2026-09-08 反证（修正上面这条的判断）：`dd7388f` 因改了 `server/index.js` 触发 Auto-Deploy，部署后线上 `/HANDOFF.md` 从 39219 → **50880 B**（正是该 commit 里的仓库版本），期间**没人点过 Manual Deploy** ⇒ 根目录文件确实跟着上了线。旧说法「根目录改动不上线」过强，准确表述是「**不触发部署，但会随快照上线**」。
 - 改 `render.yaml` 会触发一次 Blueprint sync —— sync 管的是**资源配置**，不等于把新 commit 部署到服务上。
 - 其余排查项已实测正常，别再查：Blueprint **Auto Sync = Yes**、服务 **Auto-Deploy = On Commit**、Included/Ignored Paths 均为空（没有路径过滤）。
 - 快速判断线上代码新旧：`curl.exe -s -o NUL -w '%{http_code} %{size_download}' https://chenting.cc.cd/render.yaml`，把返回字节数和新旧 commit 里该文件的大小对比（根目录被整体静态托管，见坑 12）。
 - 不想开后台：Blueprint 面板有 **Deploy Hook**，`curl` 一个带密钥的 URL 就能触发部署（密钥当 Secret 保管，**不要**提交进仓库）。
-- 💡 省事做法：**纯文档/工具类改动攒成一次 commit，再一次性 Manual Deploy**，别每改一版点一次。
+- 💡 省事做法：**纯文档/工具类改动攒成一次 commit，再一次性 `node tools/render-deploy.mjs`**，别每改一版戳一次（一次部署约 30–40s，且 Free 实例有月流量额度）。
 
 **8. 数据 Dispose/清理要成对**
 `ctx.net.on()` 返回取消订阅函数，必须在 `destroy()` 里全部调用。房间心跳 `setInterval` 与临时轮询器同理（`showLobby` 里都要 `clearInterval`）。
@@ -554,7 +554,7 @@ GitHub mysterious1014/couple-game (main)
                  render.yaml 反而会让整次 sync 因重名创建失败），所以 render.yaml 里没有 databases: 段
 ```
 
-代码推送即自动部署（Auto-Deploy = On Commit），但**服务的 Root Directory = `server`** ⇒ 只有 `server/**` 的改动会**自动触发**部署；纯根目录文档 / `render.yaml` / `tools/**` 的改动不触发，想上线要么在后台点「Manual Deploy → Deploy latest commit」，要么等下一次 `server/**` 改动随整仓快照一起带上去（详见 §11 坑 7）。一次部署约 30–40s。
+代码推送即自动部署（Auto-Deploy = On Commit），但**服务的 Root Directory = `server`** ⇒ 只有 `server/**` 的改动会**自动触发**部署；纯根目录文档 / `render.yaml` / `tools/**` 的改动不触发（详见 §11 坑 7）。**2026-09-09 起统一用 `node tools/render-deploy.mjs` 补上这一脚**（Deploy Hook + 自动校验），见 §13.7。一次部署约 30–40s。
 
 ### 13.2 环境变量（改这些都在后台 Environment 页，不要提交进仓库）
 
@@ -619,7 +619,21 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 - 2026-09-07 21:44 之前那几次 `Exited with status 1` 全部是同一个原因（原生模块 ABI 不匹配，§11 坑 10），不是欠费、不是 426、不是冷启动。
 - **2026-09-08：本机直连 `https://chenting.cc.cd` 全部 TLS `Connection was reset`（HTTPS 与明文 HTTP 都 reset，`dns.google` / `cloudflare-dns.com` 同时超时），但 `github.com` / `render.com` 正常。** 是本机网络/代理问题（系统代理 `127.0.0.1:7897` 的客户端没开），**不是站点挂了**——2026-09-07 同一条命令是能通的。判断站点死活要用「代理开着」的通道，或直接看 Render 后台的 Deploy 日志。（2026-09-08 稍后代理恢复后实测确认：`dd7388f` 部署成功、站点一切正常，见 §13.3。）**当天连 `github.com:443` 的 `git push` 也会被 reset**，遇到 push 失败先怀疑网络，别怀疑仓库。）
 
+### 13.7 自动上线（2026-09-09 起，**以后不用再手点后台**）
+
+- 根因：服务的 Root Directory = `server`，而站点前端（`index.html` / `style.css` / `js/**`）全在仓库根 ⇒ 大部分提交**不会触发** Auto-Deploy。
+- 解法：Render 的 **Deploy Hook**（服务 Settings 页最下面那条 secret URL，GET/POST 都能触发一次「部署最新 commit」）。
+  - 密钥存在仓库外：`E:\codex\.secrets\render-deploy-hook-couple-game.txt`（**不进 Git，不要贴进任何文档/回复**）。也可用环境变量 `RENDER_DEPLOY_HOOK_URL` 覆盖；换机台用 `RENDER_DEPLOY_HOOK_FILE` 改路径。
+  - 脚本：`tools/render-deploy.mjs`。
+    - `node tools/render-deploy.mjs` 触发部署 → 每 10s 轮询，直到「线上内容 == HEAD」且 `/api/health` 正常（默认最多等 5 分钟，`DEPLOY_WAIT_MS` 可调）。
+    - `node tools/render-deploy.mjs --verify` 只校验不触发（比对 HEAD 这一笔改动的文件）；再加 `--all` 就把 HEAD 里全部 20 个可访问前端文件逐个和线上做逐字节比对。
+    - `--no-verify` 只打一发就走，不等结果。
+- **约定：任何 `git push` 之后立刻跑 `node tools/render-deploy.mjs`，并把它打印的结果作为上线证据。** 这条已写进全局 `C:\Users\14760\.codex\AGENTS.md`，后续会话会自动执行，不需要用户再交代。
+- 2026-09-09 实测：`63ad16b` 只改根目录 `style.css`，push 后确实没有任何部署（线上仍是 49843 B 的旧文件）；用 hook 触发后返回 HTTP 200，约 40s 后 `--verify --all` 报「比对 20 个前端文件，全部一致」，`/api/health` = `{"ok":true,"driver":"postgres","schemaVersion":3}`。
+- 可选升级（**未做，动线上构建配置前先问用户**）：把 `render.yaml` 的 `rootDir` 去掉、构建/启动命令改成 `cd server && ...`，就能让**任意 commit 原生 Auto-Deploy**，连脚本都不用。`server/index.js` 的静态根是 `path.join(__dirname, '..')`，逻辑上不受影响，但 Node buildpack 的探测方式会变，真要改建议配一次「Clear build cache & deploy」（坑 10）。
+
 ---
+
 ## 14. 后续优化建议（Roadmap）
 
 **稳定性（建议优先）**
