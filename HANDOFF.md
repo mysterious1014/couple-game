@@ -481,6 +481,21 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 - 无头环境（仓库根没有 `node_modules`，也没装 Playwright）验不了响应式，用 Codex 内置浏览器的 `viewport` capability 逐档量 `getBoundingClientRect()` + `scrollWidth>clientWidth`。
 - ⚠️ 顺带发现（**未修，与本次改动无关**）：黑白棋在窄屏（≤600px）会横向溢出 —— `.rev-board` 是 `repeat(8,1fr)` 但末两列 `.rev-cell` 实测超出容器约 100px（`scrollWidth` 453 vs `clientWidth` 375）。本次 diff 未触碰任何 `.rev-*` 规则。
 
+**18. 「同步层吞消息 / `_cleanup()` 抹掉监听器」——双人进房类 bug 的两个根因（2026-09-11 修复）**
+
+用户报「从房间列表进别人房间：我能进去，但房主看不到我，而且进去后房主变成了我」。三个独立缺陷叠在一起，任何一个单独修都不够：
+
+1. **`Net._cleanup()` 里清 `_status` / `_handlers`**（`js/net.js`）。`host()` 和 `join()` 开头都调它，而上层的状态回调是「拿到 Net 实例时一次性绑定」的（`bindNetEvents` → `onStatus`）⇒ 建房/加入的瞬间所有状态回调被抹掉。后果：房主侧连接建立后 UI 永远停在「等待对方加入…」、开始按钮不解锁、断线遮罩和「对方掉线」提示全部失效。
+   **规则：`_cleanup()` 只复位连接与房间状态；监听器只在 `destroy()` 里清。** 另注意 `_cleanup()` 会把 `_destroyed` 复位成 false，所以 `destroy()` 必须在调用它**之后**再置 `_destroyed = true`（原代码末尾那行看着重复，其实是有意的）。
+2. **`_onControl()` 把非握手类控制消息整段吞掉**。`_onData()` 见 `CONTROL_TYPES` 就 `_onControl(m); return;`，而 `_onControl` 只认 `hello`/`resync_*`，于是 `chat` / `start_game` / `room_set_game` / `room_settings` / `room_get_settings` **收到了也不会上抛给上层** ⇒ 访客看不到房主选的游戏、永远进不了对局、悄悄话两边都不显示。现在拆成两个集合：`SYNC_TYPES`（同步层自己消化）与 `CONTROL_TYPES`（**只是不进日志、不参与回放，仍要 `_deliver` 上抛**）。
+   **规则：往 `CONTROL_TYPES` 加类型 = 让它「不进日志但仍会派发给上层」；要「只有同步层自己处理」就得放进 `SYNC_TYPES`。别把两者混为一谈。**
+3. **房间级的 4 个 `net.on(...)` 写在 `js/app.js` 模块作用域**。`showLobby()` 每次回大厅都 `realNet = new Net()`，新实例上根本没有这些订阅 ⇒ 就算 1、2 修好，第二轮进房照样收不到开局。现已挪进 `bindNetEvents(n)`，与 `onStatus` 一样**跟着实例走**；`initChat()` 的 `chat` 订阅同时加了 `chatUnsub` 退订句柄（`backToRoom() → enterRoom() → initChat()` 会在同一实例上重复注册，一条消息会渲染多遍）。
+4. 房间头部两栏是固定的**「房主 / 访客」两个座位**，不是「我 / 对方」。`enterRoom()` 原来无条件 `$('hostName').textContent = net.myName` ⇒ 访客视角「房主变成我」，而 `updateRoomPlayers()` 又把 `net.peerName` 写进访客栏 ⇒ 两栏整体对调。现在按 `net.isHost` 分派（`peerName` 在 `join()` 里已由 `/api/rooms/:code/join` 的 `hostName` 回填）。
+
+- **这类 bug 用 Node 级测试测不出来**：`tools/test-net-reconnect.mjs` 只 import `net.js`，没有 app 层绑定，也没有浏览器，所以它对 1、3 全程无感、修复前后都是绿的。要覆盖必须上真浏览器双会话。
+- 复现/回归脚本（一次性，不在仓库里）：两个 Edge 会话 + 本地服务，走「公开房间列表点进去」这条真实路径，断言两侧头部两栏、开始按钮解锁、双方进入对局、房主落子同步到访客、悄悄话双向、房主回大厅**再开一间**访客仍能进、人机模式仍能开局。修前 4 项 FAIL，修后 17 项全 PASS。
+- 后端另一处相关但**本轮未改**的口子：`POST /api/rooms/:code/join` 既不检查房间是否已满（`players` 直接 `min(...+1, 2)` 封顶），也不检查加入者是不是房主本人 ⇒ 同一间房可以被第三次、第四次 join，各自都会覆盖 `guestSecret`/`guestName`。要收紧就在这里加校验，别只在前端拦。
+
 ---
 
 ## 12. 开发与验证工作流

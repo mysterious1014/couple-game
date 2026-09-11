@@ -593,6 +593,25 @@ function bindNetEvents(n) {
       updateRoomPlayers();
     }
   });
+  // 房间级消息：必须跟着实例走。历史上它们写在模块作用域里，而 showLobby() 每次回大厅
+  // 都会 new Net()，新实例上根本没有这些订阅 ⇒ 访客收不到「房主选了游戏 / 开始游戏」。
+  n.on('room_set_game', (m) => {
+    if (n.isHost) return;
+    selectedGameId = m.gameId;
+    $('selectedGameName').textContent = m.gameName || '未选择';
+  });
+  n.on('room_settings', (m) => {
+    if (n.isHost) return;
+    selectedGameId = m.gameId;
+    $('selectedGameName').textContent = m.gameName || '未选择';
+  });
+  n.on('room_get_settings', () => {
+    if (!n.isHost) return;
+    const gm = games.find((g) => g.id === selectedGameId);
+    n.send('room_settings', { gameId: selectedGameId, gameName: gm ? gm.name : '' });
+  });
+  n.on('start_game', (m) => startGame(m.gameId));
+
   // 重连后由同步层按日志要求重建对局；不可回放的游戏就老实回到房间重开
   n.onRebuild = (entries) => {
     if (!lastGameId) return;
@@ -675,7 +694,9 @@ function enterRoom(code) {
   hideAll();
   room.hidden = false;
   $('roomCodeBig').textContent = net.isAI ? 'AI' : code;
-  $('hostName').textContent = net.myName;
+  // 房间头部两栏是固定的「房主 / 访客」两个座位，不是「我 / 对方」：访客进房时房主那栏
+  // 必须写真正的房主，否则看起来像房主被换成了自己（peerName 由 /join 响应回填）。
+  $('hostName').textContent = net.isHost || net.isAI ? net.myName : (net.peerName || '房主');
   selectedGameId = '';
   roomPasswordSet = false;
   chatPanel.hidden = net.isAI;     // 人机模式不显示悄悄话
@@ -740,8 +761,10 @@ function updateRoomPlayers() {
   const both = net.ready;
   const guestName = $('guestName');
   const guestTag = $('guestTag');
+  // 头部两栏随时按「谁是房主」重排：访客视角下房主栏 = 对方，访客栏 = 自己
+  $('hostName').textContent = net.isAI || net.isHost ? net.myName : (net.peerName || '房主');
   if (both) {
-    guestName.textContent = net.isAI ? net.peerName : net.peerName;
+    guestName.textContent = net.isAI || net.isHost ? net.peerName : net.myName;
     guestName.classList.remove('empty');
     guestTag.hidden = false;
     if (!net.isAI && net.isHost) { $('addAIBtn').hidden = true; $('removeAIBtn').hidden = true; }
@@ -835,28 +858,7 @@ function bindHostRoomEvents() {
   };
 }
 
-net.on('room_set_game', (m) => {
-  if (!net.isHost) {
-    selectedGameId = m.gameId;
-    $('selectedGameName').textContent = m.gameName || '未选择';
-  }
-});
-
-net.on('room_settings', (m) => {
-  if (!net.isHost) {
-    selectedGameId = m.gameId;
-    $('selectedGameName').textContent = m.gameName || '未选择';
-  }
-});
-
-net.on('room_get_settings', () => {
-  if (net.isHost) {
-    const gm = games.find((g) => g.id === selectedGameId);
-    net.send('room_settings', { gameId: selectedGameId, gameName: gm ? gm.name : '' });
-  }
-});
-
-net.on('start_game', (m) => startGame(m.gameId));
+// 房间级的 4 个订阅已挪进 bindNetEvents()：那里才能保证「每个 Net 实例都绑一次」。
 
 // ---------- 游戏路由 ----------
 // opts.replay：重连后按日志重建这一局，此时不能清日志、也不能重置局数计数
@@ -905,6 +907,7 @@ function backToRoom() {
 $('backBtn').onclick = backToRoom;
 
 // ---------- 聊天 ----------
+let chatUnsub = null;   // initChat() 可能被同一实例重复调用，留着上一次的退订句柄
 function initChat() {
   chatPanel.hidden = false;
   document.body.classList.add('chat-open');  // 通知 CSS 给右侧聊天栏留位
@@ -940,7 +943,8 @@ function initChat() {
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
   }
-  net.on('chat', (m) => append(m.name, m.text, false));
+  if (chatUnsub) chatUnsub();            // 同一个 Net 实例反复进房间时先退订，避免一条消息渲染多遍
+  chatUnsub = net.on('chat', (m) => append(m.name, m.text, false));
   function send() {
     const t = input.value.trim();
     if (!t) return;

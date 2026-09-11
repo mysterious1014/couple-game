@@ -16,10 +16,12 @@
 // 属性：net.me(1房主/2加入者) net.myName net.peerName net.roomCode net.isHost net.ready
 //       net.journal(本局消息日志) net.reconnecting
 
-// 这些是同步层/房间控制消息，不进日志、不参与回放（回放时由上层重新挂载房间与对局）
+// 同步层自己的握手消息：收到就由 Net 内部消化，绝不上抛、不进日志。
+const SYNC_TYPES = new Set(['hello', 'resync_request', 'resync', 'resync_done']);
+// 房间控制消息：**不进日志、不参与回放**（回放时由上层重新挂载房间与对局），
+// 但仍然要交给 app.js / 游戏注册的处理器 —— 它们不是同步层自己的消息。
 const CONTROL_TYPES = new Set([
-  'hello', 'chat', 'start_game', 'room_set_game', 'room_settings', 'room_get_settings',
-  'resync_request', 'resync', 'resync_done',
+  'chat', 'start_game', 'room_set_game', 'room_settings', 'room_get_settings',
 ]);
 
 // 重连节奏：约 30 秒内试 6 次，还不行就交给用户决定
@@ -371,8 +373,8 @@ export class Net {
   _onData(m) {
     if (!m || !m.type) return;
     if (this._replay) { this._inbox.push(m); return; }   // 回放期间先缓存，别打乱顺序
-    if (CONTROL_TYPES.has(m.type)) { this._onControl(m); return; }
-    this._journal({ type: m.type, data: m });
+    if (SYNC_TYPES.has(m.type)) { this._onControl(m); return; }
+    if (!CONTROL_TYPES.has(m.type)) this._journal({ type: m.type, data: m });
     this._deliver(m);
   }
 
@@ -382,6 +384,8 @@ export class Net {
     (this._handlers[m.type] || []).forEach((h) => h(m));
   }
 
+  // 只处理同步层自己的握手；其余消息一律走 _deliver 上抛给上层（历史上这些类型被这里
+  // 整段吞掉过，表现是「访客收不到房主选的游戏和开始游戏、悄悄话也不显示」）。
   _onControl(m) {
     if (m.type === 'hello') {
       this.peerName = m.name || '对方';
@@ -487,6 +491,10 @@ export class Net {
     if (this.peer) { try { this.peer.destroy(); } catch { /* 忽略 */ } this.peer = null; }
   }
 
+  // 注意：**不要在这里清 _status / _handlers**。host() 和 join() 开头都会调 _cleanup()，
+  // 而上层的状态回调（bindNetEvents -> onStatus）是在拿到 Net 实例时一次性绑定的，
+  // 一清就没 —— 表现就是「访客连进来了，房主界面毫无反应，永远停在等待对方加入…」。
+  // 真正要连带监听器一起丢的是 destroy()：对象从此作废，由 showLobby() 换成新实例。
   _cleanup() {
     this._destroyed = false;
     this._recovering = false;
@@ -494,8 +502,6 @@ export class Net {
     this._stopRecoveryTimer();
     this._teardownConn();
     this.me = null;
-    this._handlers = {};
-    this._status = [];
     this._waiters = [];
     this.roomCode = '';
     this.roomSecret = '';
@@ -505,8 +511,9 @@ export class Net {
   }
 
   destroy() {
-    this._destroyed = true;
     this._cleanup();
-    this._destroyed = true;
+    this._destroyed = true;      // _cleanup() 会把它复位（host/join 复用同一实例），所以要在后面再立一次
+    this._handlers = {};
+    this._status = [];
   }
 }
