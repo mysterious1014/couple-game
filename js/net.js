@@ -16,13 +16,16 @@
 // 属性：net.me(1房主/2加入者) net.myName net.peerName net.roomCode net.isHost net.ready
 //       net.journal(本局消息日志) net.reconnecting
 
-// 同步层自己的握手消息：收到就由 Net 内部消化，绝不上抛、不进日志。
+// 同步层自己的握手消息：收到就由 Net 内部消化，绝不上抛给上层。
 const SYNC_TYPES = new Set(['hello', 'resync_request', 'resync', 'resync_done']);
 // 房间控制消息：**不进日志、不参与回放**（回放时由上层重新挂载房间与对局），
 // 但仍然要交给 app.js / 游戏注册的处理器 —— 它们不是同步层自己的消息。
-const CONTROL_TYPES = new Set([
+const ROOM_CONTROL_TYPES = new Set([
   'chat', 'start_game', 'room_set_game', 'room_settings', 'room_get_settings',
 ]);
+// 「不进日志」的完整口径 = 握手 + 房间控制。send() 和收到消息时都按这个集合决定要不要
+// 记日志：漏掉握手类的话，每次连接建立发出的 hello 会被当成棋步记进日志（回放就废了）。
+const CONTROL_TYPES = new Set([...SYNC_TYPES, ...ROOM_CONTROL_TYPES]);
 
 // 重连节奏：约 30 秒内试 6 次，还不行就交给用户决定
 const RECOVER_DELAYS = [800, 1600, 3000, 5000, 8000, 12000];

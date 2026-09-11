@@ -162,8 +162,13 @@ failures += check('两边日志顺序一致', () => {
   assert.deepStrictEqual(host.journal.map((e) => e.data.n), guest.journal.map((e) => e.data.n));
   assert.strictEqual(host.journal.length, 5);
 });
-failures += check('控制消息不进日志（hello/chat 等）', () => {
-  assert.ok(host.journal.every((e) => e.type === 'mv'), JSON.stringify(host.journal.map((e) => e.type)));
+failures += check('控制消息不进日志（hello/chat 等，两侧都要查）', () => {
+  // 两侧都查：hello 是「连接建立时 send() 出去」的，只查房主一侧会漏掉加入者那半边的污染。
+  for (const [who, net] of [['host', host], ['guest', guest]]) {
+    assert.deepEqual(net.journal.map((e) => e.type), ['mv', 'mv', 'mv', 'mv', 'mv'].slice(0, net.journal.length),
+      who + ' 日志里混进了非对局消息：' + JSON.stringify(net.journal.map((e) => e.type)));
+    assert.ok(net.journal.every((e) => e.type === 'mv'), who + ' 日志含握手/控制消息');
+  }
 });
 failures += check('各自只收到对方发出的那几条', () => {
   assert.deepStrictEqual(gSink.applied, [1, 3, 5]);

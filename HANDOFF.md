@@ -487,8 +487,8 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 
 1. **`Net._cleanup()` 里清 `_status` / `_handlers`**（`js/net.js`）。`host()` 和 `join()` 开头都调它，而上层的状态回调是「拿到 Net 实例时一次性绑定」的（`bindNetEvents` → `onStatus`）⇒ 建房/加入的瞬间所有状态回调被抹掉。后果：房主侧连接建立后 UI 永远停在「等待对方加入…」、开始按钮不解锁、断线遮罩和「对方掉线」提示全部失效。
    **规则：`_cleanup()` 只复位连接与房间状态；监听器只在 `destroy()` 里清。** 另注意 `_cleanup()` 会把 `_destroyed` 复位成 false，所以 `destroy()` 必须在调用它**之后**再置 `_destroyed = true`（原代码末尾那行看着重复，其实是有意的）。
-2. **`_onControl()` 把非握手类控制消息整段吞掉**。`_onData()` 见 `CONTROL_TYPES` 就 `_onControl(m); return;`，而 `_onControl` 只认 `hello`/`resync_*`，于是 `chat` / `start_game` / `room_set_game` / `room_settings` / `room_get_settings` **收到了也不会上抛给上层** ⇒ 访客看不到房主选的游戏、永远进不了对局、悄悄话两边都不显示。现在拆成两个集合：`SYNC_TYPES`（同步层自己消化）与 `CONTROL_TYPES`（**只是不进日志、不参与回放，仍要 `_deliver` 上抛**）。
-   **规则：往 `CONTROL_TYPES` 加类型 = 让它「不进日志但仍会派发给上层」；要「只有同步层自己处理」就得放进 `SYNC_TYPES`。别把两者混为一谈。**
+2. **`_onControl()` 把非握手类控制消息整段吞掉**。`_onData()` 见 `CONTROL_TYPES` 就 `_onControl(m); return;`，而 `_onControl` 只认 `hello`/`resync_*`，于是 `chat` / `start_game` / `room_set_game` / `room_settings` / `room_get_settings` **收到了也不会上抛给上层** ⇒ 访客看不到房主选的游戏、永远进不了对局、悄悄话两边都不显示。现在拆成 `SYNC_TYPES`（同步层自己消化，不上抛）与 `ROOM_CONTROL_TYPES`（不进日志、不参与回放，但**仍要 `_deliver` 上抛**）；`CONTROL_TYPES = 两者并集`，它才是**「要不要记进日志」的唯一口径**（`send()` 与 `_onData()` 都读它）。
+   **规则：「不进日志」和「不上抛」是两个正交开关，别拿一个集合同时表达两件事。** 本轮现场翻车：把 `hello` 从 `CONTROL_TYPES` 里挪走（以为它只是「内部消息」）⇒ `send('hello')` 开始被记进日志 ⇒ 每次握手多一条、重连回放直接错乱，`test-net-reconnect` 的「重建后棋局一致」当场变红。所以 `CONTROL_TYPES` 必须是两个子集的并集；那条「控制消息不进日志」断言也已从只查房主一侧加强为**两侧都查**（只查一侧时这个污染刚好溜过去了）。
 3. **房间级的 4 个 `net.on(...)` 写在 `js/app.js` 模块作用域**。`showLobby()` 每次回大厅都 `realNet = new Net()`，新实例上根本没有这些订阅 ⇒ 就算 1、2 修好，第二轮进房照样收不到开局。现已挪进 `bindNetEvents(n)`，与 `onStatus` 一样**跟着实例走**；`initChat()` 的 `chat` 订阅同时加了 `chatUnsub` 退订句柄（`backToRoom() → enterRoom() → initChat()` 会在同一实例上重复注册，一条消息会渲染多遍）。
 4. 房间头部两栏是固定的**「房主 / 访客」两个座位**，不是「我 / 对方」。`enterRoom()` 原来无条件 `$('hostName').textContent = net.myName` ⇒ 访客视角「房主变成我」，而 `updateRoomPlayers()` 又把 `net.peerName` 写进访客栏 ⇒ 两栏整体对调。现在按 `net.isHost` 分派（`peerName` 在 `join()` 里已由 `/api/rooms/:code/join` 的 `hostName` 回填）。
 
