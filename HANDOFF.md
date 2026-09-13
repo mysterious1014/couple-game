@@ -149,9 +149,10 @@ couple-game/
 - **改房 / 关房 / 删房 / 登记 peerId / 查对方 peerId 一律要出示座位凭据**（`checkSeat(room, role, secret)`，不匹配 403）。这之前任何人只要猜到 4 位房间号，就能关掉别人的房、改掉密码、把自己的 peerId 投毒进去顶掉座位。
 - 重连时 PeerID 会变（页面没刷新、PeerJS 重新发 ID），所以配了两个端点：`POST /api/rooms/:code/seat` `{role, peerId, secret}` 登记自己的新 peerId；`GET /api/rooms/:code/peers?role=&secret=` 取对方的 peerId 与房间状态。
 - **仅登录用户创建的无密码房间进入公开列表**（防止游客房间刷屏）。
-- 房主每 30s 心跳 `POST /api/rooms/:code/heartbeat`；服务端每 30s 扫描，**90s 无心跳自动删房**；另有 24h 兜底清理。
-- 返回大厅 → `DELETE /api/rooms/:code?secret=`；直接关标签页 → `beforeunload` 用 `navigator.sendBeacon` 打 `/close`（body 里带 `{secret}`）。注意 `/close` 对**不存在的房间**直接放行，避免 beacon 误报。
-- 房间字段（`server/index.js` 内注释即权威清单）：原有 `code/peerId/password/hostName/hostUserId/players/status/gameId/gameName/createdAt/lastHeartbeat/public`，本轮加 `hostPeerId/guestPeerId/hostSecret/guestSecret/guestName/guestUserId/matchRound/currentMatchId/lastSettledAt`。
+- **两个座位各自记存活**（`hostSeenAt` / `guestSeenAt`）：`POST /api/rooms/:code/heartbeat` 带 `{role, secret}` 时续对应座位，**房主与访客都每 30s 打一次**（30 < 45，允许丢一次心跳）；服务端每 30s 扫描，房间整体 **90s 无心跳自动删房**，另有 24h 兜底清理。裸 POST（旧前端、`sendBeacon`）仍接受，但只续房间存活、不算「有人坐在访客位上」。
+- 访客座位的存活窗口是 `GUEST_SEAT_TTL_MS`（默认 **45s**，环境变量可收紧给测试用）。它 `join` 时开始计时、`/seat` 与带凭据的心跳续期，**过期即视为掉线，房间重新对别人开放**；访客主动点「离开房间」则走 `POST /api/rooms/:code/leave` 立刻让座，不用干等 45s。
+- 返回大厅：**房主** → `DELETE /api/rooms/:code?secret=`（整间房关掉）；**访客** → `POST /api/rooms/:code/leave`（只让出自己那个座位，房间留给房主）。直接关标签页 → `beforeunload` 用 `navigator.sendBeacon` 打 `/close` 或 `/leave`（body 里带 `{secret}`）。注意 `/close` 对**不存在的房间**直接放行，避免 beacon 误报；移动端 beacon 丢了也不强求，45s TTL 会兜住。
+- 房间字段（`server/index.js` 内注释即权威清单）：原有 `code/peerId/password/hostName/hostUserId/players/status/gameId/gameName/createdAt/lastHeartbeat/public`，其后加 `hostPeerId/guestPeerId/hostSecret/guestSecret/guestName/guestUserId/matchRound/currentMatchId/lastSettledAt`，2026-09-13 再加 `hostSeenAt/guestSeenAt`（两个座位各自的存活时间戳，`guestSeenAt=0` 表示空座）。
 
 ### 5.3 后端
 Express 单文件，顺序即大致职责：静态托管 → 屏蔽 `/server` 源码 → 鉴权 → 健康检查 → 房间 → 好友 → CP → 消息 → 排行榜 → 后台。
@@ -292,11 +293,12 @@ export default {
 | GET | `/api/rooms` | – | 公开房间列表（仅登录用户建的、无密码、waiting） |
 | POST | `/api/rooms` | ✔ | 创建房间 → `{code, secret, room}`，`secret` 是房主座位凭据 |
 | GET | `/api/rooms/:code` | – | 查询房间是否存在 / 是否有密码 |
-| POST | `/api/rooms/:code/join` | – | 加入房间（校验密码）→ `{code, peerId, secret}`，`secret` 是访客座位凭据 |
-| POST | `/api/rooms/:code/seat` | – | 重连用：登记自己的新 peerId，`{role, peerId, secret}`（凭据不对 403） |
+| POST | `/api/rooms/:code/join` | – | 加入房间（校验密码）→ `{code, peerId, secret}`，`secret` 是访客座位凭据。**403** 密码错 / **400** 房主 join 自己的房 / **409** 访客座位上还有活人（本人重进放行）|
+| POST | `/api/rooms/:code/leave` | 访客座位 | 访客离座：清 `guestSeenAt/guestPeerId/guestUserId/guestName/guestSecret`、`players` 回 1、`status` 回 `waiting`（body 带 `{secret}`；凭据不对 403，已经离座的再补一次也是 403）|
+| POST | `/api/rooms/:code/seat` | 座位凭据 | 登记自己的 peerId，`{role, peerId, secret}`（凭据不对 403）。**`join` 成功后访客也要调一次**：一是让 `guestSeenAt` 有数据源，二是 `guestPeerId` 不再永远为空（房主重连时要反向拨号找访客）|
 | GET | `/api/rooms/:code/peers` | – | 重连用：取对方 peerId 与房间状态，`?role=&secret=`（凭据不对 403） |
 | PATCH | `/api/rooms/:code` | 房主座位 | 改 `password` / `gameId` / `gameName` / `status` / `players`，body 需带 `secret` |
-| POST | `/api/rooms/:code/heartbeat` | – | 房主心跳（保持房间存活，不校验凭据） |
+| POST | `/api/rooms/:code/heartbeat` | – | 心跳（保持房间存活）。body 可选 `{role, secret}`：凭据对得上就顺带标记该座位存活；不传（旧前端 / `sendBeacon` 裸 POST）只续房间 |
 | POST | `/api/rooms/:code/close` | 房主座位 | 关闭房间（兼容 `sendBeacon`，body 带 `secret`；房间已不存在则放行） |
 | DELETE | `/api/rooms/:code` | 房主座位 | 删除房间，`?secret=` |
 | GET | `/api/health` | – | `{ ok, driver, schemaVersion }`，部署后确认连的是哪个存储 |
@@ -339,6 +341,8 @@ export default {
 | 游客 | 可以创建/加入房间、以临时昵称游玩，**但不能创建公开房间**（需登录）、不能上线状的 CP/好友功能；**游客对局不计分**（`/api/match/report` 需登录，且要求房间两个座位都是登录账号，否则回 `unsupported`） |
 | 私聊 / 邀请 | 仅限已是好友（accepted）且双向未拉黑 |
 | CP 绑定 | 双方用同一邀请码绑定成功后互相展示 ❤️ 横幅 |
+| 房间满员判定（2026-09-13 起） | **只看访客座位的存活时间，不看 `players`**：`guestSeenAt` 在 45s 内且坐着的不是同一个人 → `/join` 回 **409「房间已满，对方还在房间里」**；回来的若是同一登录账号（`guestUserId` 相同）视为刷新/重连，放行并换发新凭据。房主本人 join 自己的房回 **400**，不再把自己写成访客 |
+| 访客掉线多久能被接手 | 45s（`GUEST_SEAT_TTL_MS`，环境变量可改小给测试用）。主动点「离开房间」或关页面 beacon 送达 → 立刻释放 |
 
 ---
 
@@ -494,7 +498,22 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 
 - **这类 bug 用 Node 级测试测不出来**：`tools/test-net-reconnect.mjs` 只 import `net.js`，没有 app 层绑定，也没有浏览器，所以它对 1、3 全程无感、修复前后都是绿的。要覆盖必须上真浏览器双会话。
 - 复现/回归脚本（一次性，不在仓库里）：两个 Edge 会话 + 本地服务，走「公开房间列表点进去」这条真实路径，断言两侧头部两栏、开始按钮解锁、双方进入对局、房主落子同步到访客、悄悄话双向、房主回大厅**再开一间**访客仍能进、人机模式仍能开局。修前 4 项 FAIL，修后 17 项全 PASS。
-- 后端另一处相关但**本轮未改**的口子：`POST /api/rooms/:code/join` 既不检查房间是否已满（`players` 直接 `min(...+1, 2)` 封顶），也不检查加入者是不是房主本人 ⇒ 同一间房可以被第三次、第四次 join，各自都会覆盖 `guestSecret`/`guestName`。要收紧就在这里加校验，别只在前端拦。
+- 后端另一处相关的口子（**2026-09-13 已收紧，见坑 19**）：`POST /api/rooms/:code/join` 既不检查房间是否已满（`players` 直接 `min(...+1, 2)` 封顶），也不检查加入者是不是房主本人 ⇒ 同一间房可以被第三次、第四次 join，各自都会覆盖 `guestSecret`/`guestName`。
+- 同类残留（**仍未处理**）：`PATCH /api/rooms/:code` 只校验房主凭据、不校验语义，房主可以把 `players` 设成 1 或 2 的任意值。它现在只给列表显示用，所以**满员判定绝不能建在它上面**；要当判据用就先删掉这个字段。
+
+**19. `join` 没有判据 + 访客座位没人认领（2026-09-13 修复）**
+
+坑 18 末尾那条口子补上了。服务端 `/join` 现在认三件事：**房主不能 join 自己的房**（400）、**访客座位还有活人时不接手**（409）、**本人重进放行**（`guestUserId` 相同，刷新/断线重连不受影响）。判据是新增的 `guestSeenAt`，不是 `players` —— `players` 只是列表显示用的计数器，房主 `PATCH` 一下就能改，拿它当门会误伤重连。
+
+配套的前端三处（缺一个判据就是假的）：
+
+1. **`join` 成功后登记座位**：`js/net.js` 的 `join()` 在 PeerJS `open` 之后调 `_registerSeat(myPeerId)`。⚠️ 这里最容易踩：`join()` 里的 `this.peerId` 存的是**房主的** peerId（`/join` 下发的，紧接着 `peer.connect(this.peerId)` 用的就是它），自己的 id 只在 `open` 回调参数里 —— 拿 `this.peerId` 去登记等于把房主的 id 写成访客的。现在另存 `this.myPeerId`。顺带修掉一个陈年问题：以前访客从不登记，`guestPeerId` 永远为空，房主断线重连时的反向拨号（`_rehandshake` 取 `peers.guestPeerId`）根本找不到人。
+2. **两个座位都要心跳**：`js/app.js` 的 `startRoomHeartbeat()` 改成发 JSON `{role, secret}`，`enterRoom()` 的启动条件从 `net.isHost` 放开成「非人机就要心跳」。间隔 30s < TTL 45s。
+3. **离座要立刻让座**：`showLobby()` 按 `net.isHost` 分流 `DELETE /rooms/:code`（房主=关房）与 `POST /rooms/:code/leave`（访客=让座），`beforeunload` 的 beacon 同样分流；访客 join 失败（服务端已占座、P2P 没连上）也在 `catch` 里补一次 `/leave`，别让整间房白等 45s。**离座前先 `stopRoomHeartbeat()`**：否则旧凭据的心跳还在往后打。实测行为是「不报错但也不再续座」（`/leave` 清空 `guestSecret` → `checkSeat` 不过 → 静默不标记），所以不会复活座位，只是白跑请求。
+
+- 45s 这个数是「30s 心跳 + 容错一次」推出来的，别调到 30s 以下：移动端切后台掉一次心跳就会被误判掉线，把座位让别人接走。
+- ⚠️ **这类判据只有真浏览器才验得准**：`/leave` 走 `sendBeacon`、`/seat` 依赖 `peer.on('open')` 的回调参数，Node 级测试只能验到 HTTP 契约。两条都入库了：`tools/test-room-join.mjs`（免浏览器 17 项，用 `GUEST_SEAT_TTL_MS=2000` 跑过期分支）+ `tools/test-room-join-e2e.mjs`（双浏览器 19 项，含「第三人被 409 挡住」「访客离座后第三人立刻能进」；本机探测不到 Playwright 或 Edge/Chrome 时打 `SKIPPED` 并 `exit 0`，不算失败）。
+- 写 e2e 时踩到：Windows 上 `fs.rmSync(tempDir)` 在服务子进程还锁着 `.sqlite-shm` 时会抛 `EBUSY`，而它挂在 `finally` 里 ⇒ **测试结果被异常盖掉，看起来像脚本本身崩了**。规则：先打印报告、再 `await` 子进程 `exit`、最后 `rmSync` 用 try/catch 包住（清不掉就打印路径提示手动删）。
 
 ---
 
@@ -534,6 +553,12 @@ node tools/migrate-storage.mjs --from postgres --from-url "$DATABASE_URL" --to s
 
 # 8) 「记住账号密码」纯逻辑回归（注入假 storage，29 项断言，免浏览器免联网）
 node tools/test-remember.mjs
+
+# 9) 房间进房收紧回归（免浏览器，隔离端口 + 临时 DATA_DIR + GUEST_SEAT_TTL_MS=2000，17 项断言）
+node tools/test-room-join.mjs 4320
+
+# 10) 房间进房双浏览器端到端（自己起本地服务；没装 Playwright / 找不到 Edge·Chrome 时打 SKIPPED 并 exit 0）
+node tools/test-room-join-e2e.mjs 4480
 ```
 
 > ⚠️ **不要直接对前端文件用 `node --check`**：`js/` 是 ES Modules 且仓库根目录没有 `package.json`，Node 会按 CommonJS 解析，17 个前端文件会全部误报 `Cannot use import statement outside a module`。`tools/check-syntax.mjs` 的做法是把前端 `.js` 复制为临时 `.mjs` 再检查，检查完自动清理。
@@ -549,7 +574,7 @@ node tools/test-remember.mjs
 4. 起服务 curl 确认新模块能 200 返回；
 5. 人机与真人两条链路都手动点一遍；
 6. 改过 `server/store/**`（表结构/列/驱动）或任何写库的路由 → 必跑 `node tools/test-server-persistence.mjs`；动到 Postgres 一侧时，再用 `--url` 对真实 Postgres 跑一遍（只跑 SQLite 不算测过）。
-7. 改过 `js/net.js` 或房间/结算路由（`server/index.js` 的 `/api/rooms*`、`/api/match*`）→ 必跑 `node tools/test-net-reconnect.mjs` + `node tools/test-match-settlement.mjs <端口>`；动了某类消息的语义就要重新考虑它进不进日志（`net.js` 的 `CONTROL_TYPES`），否则重连回放会漏步或多步。
+7. 改过 `js/net.js` 或房间/结算路由（`server/index.js` 的 `/api/rooms*`、`/api/match*`）→ 必跑 `node tools/test-net-reconnect.mjs` + `node tools/test-match-settlement.mjs <端口>`；动了某类消息的语义就要重新考虑它进不进日志（`net.js` 的 `CONTROL_TYPES`），否则重连回放会漏步或多步。再动到**进房 / 座位**（`/join`、`/seat`、`/leave`、心跳、`GUEST_SEAT_TTL_MS`）→ 加跑 `node tools/test-room-join.mjs <端口>`；改了联网路径上的前端交互还要跑 `node tools/test-room-join-e2e.mjs <端口>`（坑 19）。
 8. 新增游戏时问一句：本局有没有「本地随机、且不同步给对面」的私有状态？有 → 标 `noReplay: true`（§6.1 约定 7）。
 9. 改过 `js/remember.js` 或 `js/auth.js` 的回填/清理链路 → 必跑 `node tools/test-remember.mjs`，再手点「勾选登录 → 重开网站 → 取消勾选 → 退出」四条路径。⚠️ 浏览器自动化**读不到** `input[type=password].value`（会被脱敏成空串），要验证密码是否真被回填，用「什么都不改直接点登录，看能不能登进去」当判据（§11.16）。
 

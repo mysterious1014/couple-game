@@ -67,7 +67,8 @@ export class Net {
     this._status = [];
     this.roomCode = '';
     this.roomSecret = '';      // 建房/加入时下发的座位凭据（重连换 PeerID 时要用）
-    this.peerId = '';
+    this.peerId = '';          // join 时是**房主的** PeerID，host / 重连时是自己的
+    this.myPeerId = '';        // 自己的 PeerID，登记座位时用
     this.ready = false;
     this.journal = [];         // 本局游戏消息日志：{ type, data }，两端顺序一致
     this.reconnecting = false;
@@ -137,15 +138,21 @@ export class Net {
 
     this.peer = new Peer(undefined, peerOptions());
 
-    await Promise.race([
+    // open 回调里的 id 才是**自己的** PeerID（this.peerId 此时已经是房主的了，别拿错）
+    const myPeerId = await Promise.race([
       new Promise((resolve, reject) => {
-        this.peer.on('open', () => resolve());
+        this.peer.on('open', (id) => resolve(id));
         this.peer.on('error', (e) => reject(e));
       }),
       timeout(8000, 'PeerJS 连接超时，请刷新重试'),
     ]);
+    this.myPeerId = myPeerId;
     // 重连时房主要反过来打给我，所以自己也得听连接
     this.peer.on('connection', (c) => this._onIncoming(c));
+    // 把自己的 PeerID 登记到访客座位上：一是让服务端的 guestSeenAt 有数据源（房间满没满就靠它），
+    // 二是 guestPeerId 不再永远为空 —— 房主断线重连时要反向拨号找访客，以前根本找不到人。
+    // 失败不致命，连接照样能建立，后面重连流程会补登记。
+    this._registerSeat(myPeerId).catch(() => { /* 忽略 */ });
 
     const c = this.peer.connect(this.peerId);
     return new Promise((resolve, reject) => {
@@ -153,6 +160,17 @@ export class Net {
       this.peer.on('error', (e) => { if (e && e.type !== 'peer-unavailable') fail(e); });
       this._setup(c, resolve, fail);
     });
+  }
+
+  // 座位登记：把自己的 PeerID 写给服务端，同时证明「这个座位还坐着人」
+  async _registerSeat(peerId, role = this._isHost ? 'host' : 'guest') {
+    if (!this.roomCode || !this.roomSecret || !peerId) return;
+    const r = await fetch(`/api/rooms/${encodeURIComponent(this.roomCode)}/seat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, peerId, secret: this.roomSecret }),
+    });
+    if (!r.ok) throw new Error('登记座位失败');
   }
 
   // 仅查询房间是否需要密码（用于 UI 提前提示）

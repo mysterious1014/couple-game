@@ -67,7 +67,12 @@ function startRoomHeartbeat(code) {
   roomOwnedCode = code;
   const ping = () => {
     if (!roomOwnedCode) return;
-    fetch(`/api/rooms/${roomOwnedCode}/heartbeat`, { method: 'POST' }).catch(() => {});
+    // 带上座位凭据，服务端才知道续的是哪个座位（房主 / 访客各算各的存活）
+    fetch(`/api/rooms/${roomOwnedCode}/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: net && net.isHost ? 'host' : 'guest', secret: (net && net.roomSecret) || '' }),
+    }).catch(() => {});
   };
   ping();
   roomHeartbeatTimer = setInterval(ping, 30 * 1000);
@@ -76,6 +81,17 @@ function startRoomHeartbeat(code) {
 function stopRoomHeartbeat() {
   if (roomHeartbeatTimer) { clearInterval(roomHeartbeatTimer); roomHeartbeatTimer = null; }
   roomOwnedCode = null;
+}
+
+// 访客离座：只让出自己那个座位，房间留给房主，别人也立刻能进来（不用干等 45s TTL）
+async function serverLeaveRoom(code) {
+  try {
+    await fetch(`/api/rooms/${code}/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: (net && net.roomSecret) || '' }),
+    });
+  } catch { /* 忽略 */ }
 }
 
 // 改房间（选游戏 / 状态 / 密码）必须带建房时下发的座位凭据，服务端据此拒绝外人乱改
@@ -142,9 +158,10 @@ function applySettlement(j) {
 // ---------- 视图切换 ----------
 function hideAll() { [lobby, room, game, profile, admin, friends, rank].forEach((s) => (s.hidden = true)); }
 function showLobby() {
-  // 若当前 net 是房主且持有真实房间，从服务端移除该房间，避免列表残留
-  if (net && net.isHost && net.roomCode && !net.isAI) {
-    serverDeleteRoom(net.roomCode);
+  // 房主离开 = 整间房关掉；访客离开 = 只让出座位，房间继续留给房主
+  if (net && !net.isAI && net.roomCode) {
+    if (net.isHost) serverDeleteRoom(net.roomCode);
+    else serverLeaveRoom(net.roomCode);
   }
   stopRoomHeartbeat();             // 停止房主心跳
   reportPresence(null);            // 离开房间，清除「所在房间」状态
@@ -514,6 +531,8 @@ $('joinBtn').onclick = async () => {
     enterRoom(raw);
   } catch (e) {
     $('lobbyHint').textContent = '加入失败：' + (e.message || '网络异常，请重试');
+    // 座位已经在服务端登记上、但 P2P 没连成的话，立刻还座，别让别人白等 45 秒
+    if (net && net.roomCode && net.roomSecret) serverLeaveRoom(net.roomCode);
   } finally {
     $('joinBtn').disabled = false;
   }
@@ -750,8 +769,8 @@ function enterRoom(code) {
     });
   };
 
-  // 房主启动心跳，保持房间不被 GC 清理；页面关闭时也会尝试清理
-  if (!net.isAI && net.isHost && net.roomCode) startRoomHeartbeat(net.roomCode);
+  // 房主和访客都要心跳：房主那份让房间不被 GC 清掉，访客那份证明自己还坐在座位上
+  if (!net.isAI && net.roomCode) startRoomHeartbeat(net.roomCode);
 
   // 上报在线状态与所在房间，让好友在列表里看到「在房间 XXXX」
   reportPresence(net.isAI ? null : net.roomCode);
@@ -1012,7 +1031,10 @@ startPublicRoomPolling();
 // 页面关闭/刷新前，若当前持有真实房间，尝试立刻通知后端清理（避免房主直接关标签导致残留）
 window.addEventListener('beforeunload', () => {
   if (roomOwnedCode) {
+    // 房主关页面 = 关房；访客关页面 = 离座。访客用 /close 会被 403 挡掉，所以以前这步是空操作。
+    // 移动端 beacon 不可靠也不强求：访客的座位 45 秒没心跳就自动释放了。
+    const endpoint = (net && net.isHost === false) ? 'leave' : 'close';
     const body = JSON.stringify({ secret: (net && net.roomSecret) || '' });
-    try { navigator.sendBeacon && navigator.sendBeacon(`/api/rooms/${roomOwnedCode}/close`, new Blob([body], { type: 'application/json' })); } catch {}
+    try { navigator.sendBeacon && navigator.sendBeacon(`/api/rooms/${roomOwnedCode}/${endpoint}`, new Blob([body], { type: 'application/json' })); } catch {}
   }
 });

@@ -407,6 +407,10 @@ app.get('/api/leaderboard', (req, res) => {
 const rooms = {};
 let nextRoomCode = 1;
 const ROOM_HEARTBEAT_MS = 90 * 1000;        // 房主 90 秒内心跳，否则视为离线删房
+// 访客座位的「还有人坐着」窗口：访客 join 后每 30s 续一次，超过 45s 没续就认定掉线，
+// 房间重新对别人开放。没有这个判据的话，join 是无条件的 —— 第三人能静默把现访客挤掉。
+// 超时可用环境变量收紧（自动化测试要跑过期分支，不能真等 45 秒）
+const GUEST_SEAT_TTL_MS = Number(process.env.GUEST_SEAT_TTL_MS) || 45 * 1000;
 const ROOM_GC_INTERVAL_MS = 30 * 1000;      // 每 30 秒扫描一次
 
 function newSecret() {
@@ -460,6 +464,8 @@ app.post('/api/rooms', (req, res) => {
   const now = Date.now();
   rooms[code] = {
     code, peerId, hostPeerId: peerId, guestPeerId: '', password: '',
+    // 两个座位各自的存活时间：房间整体 lastHeartbeat 只说明房主还在，分不清访客在不在。
+    hostSeenAt: now, guestSeenAt: 0,
     hostName: hostName || '',
     hostUserId: hostUser ? hostUser.id : null,
     hostSecret: newSecret(), guestSecret: '',
@@ -489,6 +495,18 @@ app.post('/api/rooms/:code/join', (req, res) => {
     return res.status(403).json({ error: '密码错误' });
   }
   const guest = currentUser(req);
+  // 房主不能加入自己的房间：从公开列表点到自己那间就会走到这里，之前会把自己写成访客，
+  // 表现为「房间凭空多出一个自己」，而且原来的 hostSecret 仍在这台上，座位彻底乱套。
+  if (guest && room.hostUserId && guest.id === room.hostUserId) {
+    return res.status(400).json({ error: '这是你自己的房间，直接刷新页面或重新建房即可' });
+  }
+  // 座位上还有活人时不许接手，除非回来的就是本人（刷新页面 / 断线重连）。
+  const seatLive = Date.now() - (room.guestSeenAt || 0) < GUEST_SEAT_TTL_MS;
+  const isSameGuest = !!guest && !!room.guestUserId && guest.id === room.guestUserId;
+  if (room.guestSeenAt && seatLive && !isSameGuest) {
+    return res.status(409).json({ error: '房间已满，对方还在房间里' });
+  }
+  room.guestSeenAt = Date.now();
   room.guestSecret = newSecret();
   room.guestUserId = guest ? guest.id : null;
   room.guestName = guest ? (guest.nickname || guest.username) : String(req.body.name || '');
@@ -506,8 +524,8 @@ app.post('/api/rooms/:code/seat', (req, res) => {
   const { role, peerId, secret } = req.body || {};
   if (!peerId) return res.status(400).json({ error: '缺少 peerId' });
   if (!checkSeat(room, role, secret)) return res.status(403).json({ error: '座位凭据不正确' });
-  if (role === 'host') { room.hostPeerId = peerId; room.peerId = peerId; }
-  else room.guestPeerId = peerId;
+  if (role === 'host') { room.hostPeerId = peerId; room.peerId = peerId; room.hostSeenAt = Date.now(); }
+  else { room.guestPeerId = peerId; room.guestSeenAt = Date.now(); }
   room.lastHeartbeat = Date.now();
   res.json({ ok: true, hostPeerId: room.hostPeerId, guestPeerId: room.guestPeerId });
 });
@@ -539,10 +557,33 @@ app.patch('/api/rooms/:code', (req, res) => {
 });
 
 // 房主心跳：保持房间存活
+// 心跳：带 role + secret 时顺带标记「那个座位还有人坐着」；不带就只续房间整体存活，
+// 兼容旧前端与 sendBeacon 的裸 POST。
 app.post('/api/rooms/:code/heartbeat', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ error: '房间不存在' });
+  const { role, secret } = req.body || {};
+  if (role && checkSeat(room, role === 'guest' ? 'guest' : 'host', secret)) {
+    if (role === 'guest') room.guestSeenAt = Date.now();
+    else room.hostSeenAt = Date.now();
+  }
   room.lastHeartbeat = Date.now();
+  res.json({ ok: true });
+});
+
+// 访客离座：只清自己那个座位，房间还给房主和其他人用（不等 TTL 才能立刻重新开放）
+app.post('/api/rooms/:code/leave', (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  const { secret } = req.body || {};
+  if (!checkSeat(room, 'guest', secret)) return res.status(403).json({ error: '座位凭据不正确' });
+  room.guestSeenAt = 0;
+  room.guestPeerId = '';
+  room.guestUserId = null;
+  room.guestName = '';
+  room.guestSecret = '';
+  room.players = 1;
+  room.status = 'waiting';
   res.json({ ok: true });
 });
 
