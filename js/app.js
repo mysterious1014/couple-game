@@ -681,12 +681,15 @@ function renderPublicRooms(rooms) {
     return;
   }
   listEl.innerHTML = rooms.map((r) => {
-    const statusText = r.players >= 2 ? '已满' : '等待中';
-    const statusCls = r.players >= 2 ? '' : 'waiting';
+    // players 只是列表展示用的计数（房主 PATCH 得动），真正「能不能进」由服务端 /join 判 guestSeenAt。
+    // 这里置灰禁点只为省掉一次注定 409 的请求，判据本身不许建在它上面。
+    const full = (r.players || 1) >= 2;
+    const statusText = full ? '已满' : '等待中';
+    const statusCls = full ? 'full' : 'waiting';
     const gameText = r.gameName || '未选择游戏';
     const gameCls = r.gameName ? 'game' : '';
     return `
-      <div class="pr-item" data-code="${escapeHtml(r.code)}">
+      <div class="pr-item${full ? ' full' : ''}" data-code="${escapeHtml(r.code)}" data-full="${full ? '1' : '0'}"${full ? ' aria-disabled="true"' : ''}>
         <div class="pr-meta">
           <span class="pr-code">${escapeHtml(r.code)}</span>
           <span class="pr-host">房主：${escapeHtml(r.hostName || '房主')}</span>
@@ -700,6 +703,12 @@ function renderPublicRooms(rooms) {
 
   listEl.querySelectorAll('.pr-item').forEach((item) => {
     item.onclick = () => {
+      if (item.dataset.full === '1') {
+        // 列表 6s 才刷一次，「已满」可能是旧数据（访客刚走 / 座位刚过期）—— 点一下顺手刷新，别把房间锁死
+        showToast('这个房间已经两个人了，正在刷新列表…');
+        loadPublicRooms();
+        return;
+      }
       const code = item.dataset.code;
       $('roomInput').value = code;
       $('joinBtn').click();

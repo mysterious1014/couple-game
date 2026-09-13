@@ -343,6 +343,7 @@ export default {
 | CP 绑定 | 双方用同一邀请码绑定成功后互相展示 ❤️ 横幅 |
 | 房间满员判定（2026-09-13 起） | **只看访客座位的存活时间，不看 `players`**：`guestSeenAt` 在 45s 内且坐着的不是同一个人 → `/join` 回 **409「房间已满，对方还在房间里」**；回来的若是同一登录账号（`guestUserId` 相同）视为刷新/重连，放行并换发新凭据。房主本人 join 自己的房回 **400**，不再把自己写成访客 |
 | 访客掉线多久能被接手 | 45s（`GUEST_SEAT_TTL_MS`，环境变量可改小给测试用）。主动点「离开房间」或关页面 beacon 送达 → 立刻释放 |
+| 列表里的「已满」 | 前端按 `players >= 2` 给该条加 `.pr-item.full`（`aria-disabled` + 置灰 + 禁点），点它只弹轻提示并 `loadPublicRooms()` 刷新。**这只是省一次注定 409 的请求，不许当判据**：`players` 房主 `PATCH` 得动，且列表 6s 才刷一次（真判据永远是服务端 `guestSeenAt`）|
 
 ---
 
@@ -370,7 +371,7 @@ export default {
 
 - [x] 账号体系：注册 / 登录 / 登出 / 记住用户名 / 密码强度提示 / 确认密码 / scrypt 哈希 / httpOnly Cookie
 - [x] **记住账号密码（仅本机）**：勾上后凭据留在本机、会话延长到 30 天，重开网站自动回填；取消勾选或点退出即清除（§5.5）
-- [x] 房间：4 位房间号、房间密码、拷贝房号、公开房间列表（6s 轮询）、房主设置面板
+- [x] 房间：4 位房间号、房间密码、拷贝房号、公开房间列表（6s 轮询，**已满的那条置灰不可点**，点一下给轻提示并顺手刷新）、房主设置面板
 - [x] 对战：真人 P2P + **人机（8 款游戏 × 3 档难度）**、房间内「邀请电脑玩家」
 - [x] 游戏：五子棋、你画我猜、黑白棋、点格棋、记忆翻牌、海龟汤、吹牛、UNO
 - [x] 结算：结算弹窗（胜/负/平 + 动画 + 积分变化 + 各游戏专属文案）+ 再来一局
@@ -512,7 +513,7 @@ SQLite 驱动是同步写，行为与旧版一致；Postgres 驱动把写请求�
 3. **离座要立刻让座**：`showLobby()` 按 `net.isHost` 分流 `DELETE /rooms/:code`（房主=关房）与 `POST /rooms/:code/leave`（访客=让座），`beforeunload` 的 beacon 同样分流；访客 join 失败（服务端已占座、P2P 没连上）也在 `catch` 里补一次 `/leave`，别让整间房白等 45s。**离座前先 `stopRoomHeartbeat()`**：否则旧凭据的心跳还在往后打。实测行为是「不报错但也不再续座」（`/leave` 清空 `guestSecret` → `checkSeat` 不过 → 静默不标记），所以不会复活座位，只是白跑请求。
 
 - 45s 这个数是「30s 心跳 + 容错一次」推出来的，别调到 30s 以下：移动端切后台掉一次心跳就会被误判掉线，把座位让别人接走。
-- ⚠️ **这类判据只有真浏览器才验得准**：`/leave` 走 `sendBeacon`、`/seat` 依赖 `peer.on('open')` 的回调参数，Node 级测试只能验到 HTTP 契约。两条都入库了：`tools/test-room-join.mjs`（免浏览器 17 项，用 `GUEST_SEAT_TTL_MS=2000` 跑过期分支）+ `tools/test-room-join-e2e.mjs`（双浏览器 19 项，含「第三人被 409 挡住」「访客离座后第三人立刻能进」；本机探测不到 Playwright 或 Edge/Chrome 时打 `SKIPPED` 并 `exit 0`，不算失败）。
+- ⚠️ **这类判据只有真浏览器才验得准**：`/leave` 走 `sendBeacon`、`/seat` 依赖 `peer.on('open')` 的回调参数，Node 级测试只能验到 HTTP 契约。两条都入库了：`tools/test-room-join.mjs`（免浏览器 17 项，用 `GUEST_SEAT_TTL_MS=2000` 跑过期分支）+ `tools/test-room-join-e2e.mjs`（双浏览器 24 项，含「已满那条被标成不可点、视觉确实是灰的」「点它不进房不报错、只提示+刷新」「手输房号仍被服务端 409 挡住」「访客离座后第三人立刻能进」；本机探测不到 Playwright 或 Edge/Chrome 时打 `SKIPPED` 并 `exit 0`，不算失败。设 `SHOT_DIR` 会把大厅截图存下来，供人工复核观感）。
 - 写 e2e 时踩到：Windows 上 `fs.rmSync(tempDir)` 在服务子进程还锁着 `.sqlite-shm` 时会抛 `EBUSY`，而它挂在 `finally` 里 ⇒ **测试结果被异常盖掉，看起来像脚本本身崩了**。规则：先打印报告、再 `await` 子进程 `exit`、最后 `rmSync` 用 try/catch 包住（清不掉就打印路径提示手动删）。
 
 ---

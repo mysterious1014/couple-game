@@ -1,6 +1,7 @@
 // 房间进房的双浏览器端到端回归（需要本机有 Edge/Chrome + playwright，否则自动 SKIPPED）。
 // 自己起隔离端口的本地服务 + 临时 DATA_DIR，绝不连线上库。
 // 用法：node tools/test-room-join-e2e.mjs [端口]
+// 可选：设环境变量 SHOT_DIR 会把大厅截图存到该目录（人工复核观感用）
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -129,14 +130,32 @@ try {
   check('访客侧房主栏是真房主（不是自己）', nb.host === '小A', nb.host);
   check('访客侧访客栏是自己', nb.guest === '小B', nb.guest);
 
-  // ---- 新增：第三人从列表点进来应当被挡住 ----
+  // ---- 第三人：列表里那间已满的房应当置灰不可点（省一次请求），手输房号仍由服务端 409 挡住 ----
   const C = await open(cookieOf.carol);
-  await C.waitForSelector(`.pr-item[data-code="${code1}"]`, { timeout: 25000 });
-  await C.click(`.pr-item[data-code="${code1}"]`);
+  const itemSel = `.pr-item[data-code="${code1}"]`;
+  await C.waitForSelector(itemSel, { timeout: 25000 });
+  check('第三人看到的已满房间被标成不可点', await C.locator(itemSel).evaluate((el) => el.classList.contains('full') && el.dataset.full === '1' && el.getAttribute('aria-disabled') === 'true'), await C.locator(itemSel).getAttribute('class'));
+  const cssC = await C.locator(itemSel).evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { opacity: cs.opacity, cursor: cs.cursor, code: getComputedStyle(el.querySelector('.pr-code')).color, tag: getComputedStyle(el.querySelector('.pr-tag')).color };
+  });
+  check('已满房间看起来是灰的（降透明度 + 禁用指针 + 文字变灰）',
+    Number(cssC.opacity) < 1 && cssC.cursor === 'not-allowed' && cssC.code === cssC.tag, JSON.stringify(cssC));
+  if (process.env.SHOT_DIR) {
+    fs.mkdirSync(process.env.SHOT_DIR, { recursive: true });
+    await C.screenshot({ path: path.join(process.env.SHOT_DIR, 'lobby-room-full.png') });
+  }
+  await C.click(itemSel);
+  await sleep(1200);
+  check('点已满房间不会进房（前端就拦下）', await C.locator('#room').isHidden(), 'roomHidden=' + await C.locator('#room').isHidden());
+  check('点已满房间有轻提示并刷新列表', (await text(C, '#appToast')).includes('两个人'), await text(C, '#appToast'));
+  check('点已满房间不该报「加入失败」（没打到服务端）', !/加入失败/.test(await text(C, '#lobbyHint')), await text(C, '#lobbyHint'));
+  await C.locator('#roomInput').fill(code1);
+  await C.click('#joinBtn');
   await C.waitForFunction(() => /房间已满/.test(document.getElementById('lobbyHint').textContent || ''), { timeout: 15000 }).catch(() => {});
   const hintC = await text(C, '#lobbyHint');
-  check('第三人被挡住：提示「加入失败：房间已满」', /加入失败/.test(hintC) && /房间已满/.test(hintC), hintC);
-  check('第三人被挡住：没有进到房间里', await C.locator('#room').isHidden(), 'roomHidden=' + await C.locator('#room').isHidden());
+  check('手输房号仍被服务端 409 挡住', /加入失败/.test(hintC) && /房间已满/.test(hintC), hintC);
+  check('第三人被服务端挡住：仍在大厅', await C.locator('#room').isHidden(), 'roomHidden=' + await C.locator('#room').isHidden());
   check('第三人被挡住：房主侧没多出访客（仍是小B）', (await seats(A)).guest === '小B', (await seats(A)).guest);
 
   // ---- 悄悄话双向 ----

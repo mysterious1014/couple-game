@@ -181,6 +181,11 @@ button.ghost.solo:hover { background: rgba(255, 126, 179, 0.16); }
   cursor: pointer;
 }
 .pr-item:hover { background: rgba(255, 126, 179, 0.12); border-color: rgba(255, 126, 179, 0.3); transform: translateY(-1px); }
+/* 已满房间置灰不可点（真判据在服务端 /join，这里只是少发一次无效请求） */
+.pr-item.full { opacity: .5; cursor: not-allowed; }
+.pr-item.full:hover { background: var(--glass); border-color: var(--line-soft); transform: none; }
+.pr-item.full .pr-code { color: var(--muted); }
+.pr-tag.full { background: rgba(148, 155, 175, 0.18); color: var(--muted); }
 .pr-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .pr-code { font-size: 18px; font-weight: 800; letter-spacing: 2px; color: var(--accent); }
 .pr-host { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
